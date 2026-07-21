@@ -21,7 +21,19 @@ function loadInlineCredentials() {
     raw = raw.slice(1, -1).trim();
   }
   // Raw JSON pasted directly, or base64 — auto-detect.
-  const text = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+  let text;
+  if (raw.startsWith('{')) {
+    text = raw;
+  } else {
+    // Some hosts turn base64 '+' into ' ' (URL/form decoding) and insert line
+    // breaks — undo both before decoding, and support base64url ('-' '_').
+    const clean = raw
+      .replace(/[\r\n\t]+/g, '')
+      .replace(/ /g, '+')
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    text = Buffer.from(clean, 'base64').toString('utf8');
+  }
   let creds;
   try {
     creds = JSON.parse(text);
