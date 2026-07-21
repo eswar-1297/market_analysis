@@ -68,6 +68,23 @@ app.use('/api', (req, res, next) => {
   return res.status(401).json({ error: 'Unauthorized' });
 });
 
+// Safe credential diagnostic — reveals length/shape, NOT the secret itself.
+app.get('/api/credcheck', (req, res) => {
+  const v = config.googleCredentialsB64 || '';
+  const noWs = v.replace(/\s+/g, '');
+  res.json({
+    present: Boolean(v),
+    length: v.length,
+    startsWithBrace: v.trim().startsWith('{'),
+    hasSpaces: /\s/.test(v.trim()),
+    looksHex: /^[0-9a-fA-F]+$/.test(noWs),
+    looksBase64Standard: /^[A-Za-z0-9+/=]+$/.test(noWs),
+    looksBase64Url: /[-_]/.test(noWs) && /^[A-Za-z0-9\-_=]+$/.test(noWs),
+    first6: v.slice(0, 6),
+    last6: v.slice(-6),
+  });
+});
+
 app.get('/api/meta', (req, res) => {
   const data = loadCombinations();
   res.json({
