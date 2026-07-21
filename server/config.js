@@ -4,8 +4,9 @@ export const config = {
   port: Number(process.env.PORT) || 4000,
   ga4PropertyId: (process.env.GA4_PROPERTY_ID || '').trim(),
   googleAppCreds: (process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim(),
-  // Deployment-friendly: full service-account JSON, base64-encoded, in one env var.
-  googleCredentialsB64: (process.env.GOOGLE_CREDENTIALS_B64 || '').trim(),
+  // Deployment-friendly: full service-account JSON in one env var — accepts
+  // base64 OR raw JSON, via GOOGLE_CREDENTIALS_B64 or GOOGLE_CREDENTIALS_JSON.
+  googleCredentialsB64: (process.env.GOOGLE_CREDENTIALS_B64 || process.env.GOOGLE_CREDENTIALS_JSON || '').trim(),
   scSiteUrl: (process.env.SEARCH_CONSOLE_SITE_URL || '').trim(),
   pagespeedApiKey: (process.env.PAGESPEED_API_KEY || '').trim(),
   // Dashboard login (HTTP Basic Auth). Override in .env if desired.

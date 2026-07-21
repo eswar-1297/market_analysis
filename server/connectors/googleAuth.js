@@ -12,6 +12,33 @@ export const SCOPES = [
 
 let cached;
 
+// Parse inline service-account credentials robustly — tolerant of the common
+// ways env values get mangled on hosting platforms.
+function loadInlineCredentials() {
+  let raw = config.googleCredentialsB64.trim();
+  // Strip accidental surrounding quotes some platforms add.
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim();
+  }
+  // Raw JSON pasted directly, or base64 — auto-detect.
+  const text = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+  let creds;
+  try {
+    creds = JSON.parse(text);
+  } catch (e) {
+    throw new Error(
+      'Could not parse service-account credentials. Set GOOGLE_CREDENTIALS_B64 to the ' +
+        'COMPLETE base64 of the JSON key (or GOOGLE_CREDENTIALS_JSON to the raw JSON). ' +
+        'Original error: ' + e.message
+    );
+  }
+  // If raw JSON was used, the private key may have escaped newlines — fix them.
+  if (creds.private_key && creds.private_key.includes('\\n')) {
+    creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+  }
+  return creds;
+}
+
 export function getGoogleAuth() {
   if (cached) return cached;
   if (hasOAuth) {
@@ -19,9 +46,8 @@ export function getGoogleAuth() {
     client.setCredentials({ refresh_token: config.oauth.refreshToken });
     cached = client;
   } else if (config.googleCredentialsB64) {
-    // Inline service-account JSON (base64) — deployment-friendly, no key file.
-    const creds = JSON.parse(Buffer.from(config.googleCredentialsB64, 'base64').toString('utf8'));
-    cached = new google.auth.GoogleAuth({ credentials: creds, scopes: SCOPES });
+    // Inline service-account JSON — deployment-friendly, no key file needed.
+    cached = new google.auth.GoogleAuth({ credentials: loadInlineCredentials(), scopes: SCOPES });
   } else {
     // Falls back to GOOGLE_APPLICATION_CREDENTIALS (service-account key file).
     cached = new google.auth.GoogleAuth({ scopes: SCOPES });
