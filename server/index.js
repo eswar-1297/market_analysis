@@ -50,13 +50,18 @@ app.use(cors());
 app.use(express.json());
 
 // --- Login: verify credentials, hand back a token the client stores ---
-const validTokens = new Set();
+// The token is a deterministic HMAC of the credentials, so it stays valid
+// across server restarts/redeploys (no in-memory session store to wipe).
+function sessionToken() {
+  return crypto
+    .createHmac('sha256', config.authPass + '|' + config.authUser)
+    .update('cf-session-v1')
+    .digest('hex');
+}
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   if (username === config.authUser && password === config.authPass) {
-    const token = crypto.randomUUID();
-    validTokens.add(token);
-    return res.json({ token });
+    return res.json({ token: sessionToken() });
   }
   return res.status(401).json({ error: 'Invalid username or password' });
 });
@@ -64,7 +69,7 @@ app.post('/api/login', (req, res) => {
 // Everything else under /api requires a valid token (login above is exempt).
 app.use('/api', (req, res, next) => {
   const [scheme, token] = (req.headers.authorization || '').split(' ');
-  if (scheme === 'Bearer' && validTokens.has(token)) return next();
+  if (scheme === 'Bearer' && token === sessionToken()) return next();
   return res.status(401).json({ error: 'Unauthorized' });
 });
 

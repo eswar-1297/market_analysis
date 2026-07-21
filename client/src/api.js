@@ -12,11 +12,16 @@ function headers(extra = {}) {
   return { ...extra, ...(t ? { Authorization: `Bearer ${t}` } : {}) };
 }
 
+function onUnauthorized() {
+  auth.clear();
+  // Tell the app to show the login page — NO full-page reload (avoids loops).
+  window.dispatchEvent(new Event('cf-unauthorized'));
+}
+
 async function get(url) {
   const res = await fetch(url, { headers: headers() });
   if (res.status === 401) {
-    auth.clear();
-    window.location.reload(); // token invalid/expired -> back to login
+    onUnauthorized();
     throw new Error('Unauthorized');
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);

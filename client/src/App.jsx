@@ -41,6 +41,13 @@ export default function App() {
     setSearchParams(sp, { replace: true });
   };
 
+  // If any request comes back 401, drop to the login page smoothly (no reload).
+  useEffect(() => {
+    const onUnauth = () => setAuthed(false);
+    window.addEventListener('cf-unauthorized', onUnauth);
+    return () => window.removeEventListener('cf-unauthorized', onUnauth);
+  }, []);
+
   useEffect(() => {
     if (!authed) return;
     (async () => {
@@ -59,7 +66,7 @@ export default function App() {
 
   // Article authors for the selected combination (top-right badge).
   useEffect(() => {
-    if (!comboId) {
+    if (!authed || !comboId) {
       setAuthors([]);
       return;
     }
@@ -77,7 +84,7 @@ export default function App() {
   const range = start && end ? { start, end } : null;
 
   useEffect(() => {
-    if (!selectedId || !range) return;
+    if (!authed || !selectedId || !range) return;
     setLoading(true);
     setError(null);
     api
@@ -85,7 +92,7 @@ export default function App() {
       .then(setDetail)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [selectedId, start, end, country]);
+  }, [selectedId, start, end, country, authed]);
 
   const selectedCombo = combos.find((c) => c.id === selectedId);
   const detailReady = detail && detail.id === selectedId;
