@@ -19,6 +19,35 @@ flags for content / SEO / dev).
 
 ---
 
+## 0. Deploy (production)
+
+The app runs as **one Node process** that serves both the built UI and the API.
+
+1. `npm run install:all && npm run build`
+2. Set these **environment variables** on your host (do NOT upload `.env` — it's
+   gitignored; set them in the platform's config):
+
+   ```
+   PORT=4000
+   DASHBOARD_USER=CFMARKETING
+   DASHBOARD_PASS=<your password>
+   GA4_PROPERTY_ID=351699324
+   SEARCH_CONSOLE_SITE_URL=https://www.cloudfuze.com/
+   PAGESPEED_API_KEY=<key>
+   GOOGLE_CREDENTIALS_B64=<full base64 of the service-account JSON>
+   ```
+
+   - `GOOGLE_CREDENTIALS_B64` accepts **base64 OR raw JSON**. You can also use
+     `GOOGLE_CREDENTIALS_JSON` and paste the raw key-file contents.
+   - Paste the **complete** value — a truncated base64 causes an
+     "Unexpected token in JSON" error and the app falls back to sample data.
+3. `npm start` (or run under PM2: `pm2 start ecosystem.config.cjs`).
+
+The service account must be granted **Viewer** on the GA4 property and added as
+a user on the Search Console property.
+
+---
+
 ## 1. Install & run
 
 Requires **Node.js 18+** (has built-in `fetch`). Check with `node -v`.
