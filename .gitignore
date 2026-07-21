@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+client/node_modules/
+
+# build output (run `npm run build` on deploy)
+client/dist/
+
+# secrets & local config — NEVER commit
+.env
+.env.local
+*.key.json
+service-account*.json
+
+# logs / runtime
+*.log
+.pm2/
+
+# OS
+.DS_Store
+Thumbs.db
