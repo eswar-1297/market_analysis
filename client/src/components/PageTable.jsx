@@ -70,7 +70,7 @@ export default function PageTable({ pages, compare = true }) {
                     <a href={p.url} target="_blank" rel="noreferrer" title={p.url}>
                       {p.label}
                     </a>
-                    {p.author && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{p.author}</div>}
+                    {p.author && <span className="page-author">{p.author}</span>}
                   </td>
                   <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
                   <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
