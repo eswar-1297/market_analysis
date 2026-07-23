@@ -9,6 +9,7 @@ import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
 import { pagespeedPage } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { pageAuthor } from './connectors/authors.js';
+import { getOverview } from './services/overview.js';
 import { previousPeriod, toISO } from './services/dates.js';
 import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
@@ -114,6 +115,22 @@ app.get('/api/combinations', (req, res) => {
       owners: c.owners,
     }))
   );
+});
+
+// Aggregated overview of ALL combinations (default landing view).
+app.get('/api/overview', async (req, res) => {
+  try {
+    const data = loadCombinations();
+    const range = defaultRange();
+    const start = req.query.start || range.start;
+    const end = req.query.end || range.end;
+    const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
+    const result = await getOverview(data.combinations, start, end, country);
+    res.json({ ...result, range: { start, end }, country, dataMode: overallMode() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/combinations/:id', async (req, res) => {

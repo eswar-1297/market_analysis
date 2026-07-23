@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { api, auth } from './api.js';
 import PageTable from './components/PageTable.jsx';
+import Overview from './components/Overview.jsx';
 import LoginPage from './components/LoginPage.jsx';
 
 function daysBetween(start, end) {
@@ -30,12 +31,14 @@ export default function App() {
   const [meta, setMeta] = useState(null);
   const [combos, setCombos] = useState([]);
   const [detail, setDetail] = useState(null);
+  const [overview, setOverview] = useState(null);
   const [authors, setAuthors] = useState(undefined); // undefined = loading
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const path = location.pathname;
   const comboId = path.startsWith('/c/') ? decodeURIComponent(path.slice(3)) : null;
+  const isAll = !comboId; // "/" (or anything not /c/:id) = all-combinations overview
   const selectedId = comboId;
   const country = searchParams.get('region') || 'US';
   const compare = searchParams.get('cmp') !== '0'; // comparison on by default
@@ -50,7 +53,8 @@ export default function App() {
 
   const go = (id) => {
     const qs = searchParams.toString();
-    navigate(qs ? `/c/${id}?${qs}` : `/c/${id}`);
+    const p = id === '__all__' ? '/' : `/c/${id}`;
+    navigate(qs ? `${p}?${qs}` : p);
   };
   const setParam = (key, value) => {
     const sp = new URLSearchParams(searchParams);
@@ -74,12 +78,17 @@ export default function App() {
     })().catch((e) => setError(e.message));
   }, [authed]);
 
+  // All-combinations overview (default view).
   useEffect(() => {
-    if (combos.length && !selectedId && path === '/') {
-      const qs = searchParams.toString();
-      navigate(qs ? `/c/${combos[0].id}?${qs}` : `/c/${combos[0].id}`, { replace: true });
-    }
-  }, [combos, selectedId, path]);
+    if (!authed || !isAll || !start || !end) return;
+    setLoading(true);
+    setError(null);
+    api
+      .overview(start, end, country)
+      .then(setOverview)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [authed, isAll, start, end, country]);
 
   // Article authors for the selected combination (top-right badge).
   useEffect(() => {
@@ -114,7 +123,7 @@ export default function App() {
   const selectedCombo = combos.find((c) => c.id === selectedId);
   const detailReady = detail && detail.id === selectedId;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
-  const title = selectedCombo ? selectedCombo.name : 'Loading…';
+  const title = isAll ? 'All combinations' : selectedCombo ? selectedCombo.name : 'Loading…';
   const regionLabel = meta?.regions.find((r) => r.code === country)?.label || country;
   const pageCount = selectedCombo?.pageCount;
 
@@ -149,15 +158,18 @@ export default function App() {
         <div className="appbar-controls">
           <select
             className="combo-select"
-            value={selectedId || ''}
+            value={isAll ? '__all__' : selectedId || ''}
             onChange={(e) => go(e.target.value)}
-            title="Select a combination"
+            title="Select a view"
           >
-            {combos.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.pageCount})
-              </option>
-            ))}
+            <option value="__all__">All combinations</option>
+            <optgroup label="Combinations">
+              {combos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.pageCount})
+                </option>
+              ))}
+            </optgroup>
           </select>
 
           {meta && (
@@ -196,15 +208,17 @@ export default function App() {
             </div>
           )}
 
-          <button
-            className={`toggle-btn ${compare ? 'active' : ''}`}
-            onClick={() => setParam('cmp', compare ? '0' : '1')}
-            title="Compare against another period"
-          >
-            ⇄ Compare {compare ? 'on' : 'off'}
-          </button>
+          {!isAll && (
+            <button
+              className={`toggle-btn ${compare ? 'active' : ''}`}
+              onClick={() => setParam('cmp', compare ? '0' : '1')}
+              title="Compare against another period"
+            >
+              ⇄ Compare {compare ? 'on' : 'off'}
+            </button>
+          )}
 
-          {compare && meta && (
+          {!isAll && compare && meta && (
             <div className="date-range" title="Compare-to period">
               <span className="date-sep">vs</span>
               <input
@@ -231,18 +245,20 @@ export default function App() {
       <main className="main">
         <div className="title-row">
           <h1 className="h1">{title}</h1>
-          <div className="authors">
-            {authors === undefined ? (
-              <span className="spinner" />
-            ) : authors.length ? (
-              <>
-                <span className="authors-label">{authors.length > 1 ? 'Authors' : 'Author'}</span>
-                <span className="authors-names">✍ {authors.join(', ')}</span>
-              </>
-            ) : (
-              <span className="authors-names" style={{ color: 'var(--muted)' }}>No author found</span>
-            )}
-          </div>
+          {!isAll && (
+            <div className="authors">
+              {authors === undefined ? (
+                <span className="spinner" />
+              ) : authors.length ? (
+                <>
+                  <span className="authors-label">{authors.length > 1 ? 'Authors' : 'Author'}</span>
+                  <span className="authors-names">✍ {authors.join(', ')}</span>
+                </>
+              ) : (
+                <span className="authors-names" style={{ color: 'var(--muted)' }}>No author found</span>
+              )}
+            </div>
+          )}
         </div>
 
         {error && <div className="warn-banner">Error: {error}</div>}
@@ -257,7 +273,9 @@ export default function App() {
 
         {loading && <div className="loading">Loading data…</div>}
 
-        {!loading && detailReady && <PageTable pages={detail.pages} compare={compare} />}
+        {!loading && isAll && overview && <Overview rows={overview.rows} onOpen={go} />}
+
+        {!loading && !isAll && detailReady && <PageTable pages={detail.pages} compare={compare} />}
       </main>
     </div>
   );
