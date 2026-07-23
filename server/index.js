@@ -9,7 +9,7 @@ import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
 import { pagespeedPage } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { pageAuthor } from './connectors/authors.js';
-import { getOverview } from './services/overview.js';
+import { getOverview, withDeltas } from './services/overview.js';
 import { previousPeriod, toISO } from './services/dates.js';
 import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
@@ -126,6 +126,11 @@ app.get('/api/overview', async (req, res) => {
     const end = req.query.end || range.end;
     const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
     const result = await getOverview(data.combinations, start, end, country);
+    // Optional comparison period (cstart/cend, GA-style) → per-combination deltas.
+    if (req.query.cstart && req.query.cend) {
+      const prev = await getOverview(data.combinations, req.query.cstart, req.query.cend, country);
+      result.rows = withDeltas(result.rows, prev.rows);
+    }
     res.json({ ...result, range: { start, end }, country, dataMode: overallMode() });
   } catch (err) {
     console.error(err);

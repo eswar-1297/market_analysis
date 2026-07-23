@@ -84,11 +84,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     api
-      .overview(start, end, country)
+      .overview(start, end, country, compare ? cstart : null, compare ? cend : null)
       .then(setOverview)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [authed, isAll, start, end, country]);
+  }, [authed, isAll, start, end, country, compare, cstart, cend]);
 
   // Article authors for the selected combination (top-right badge).
   useEffect(() => {
@@ -208,17 +208,15 @@ export default function App() {
             </div>
           )}
 
-          {!isAll && (
-            <button
-              className={`toggle-btn ${compare ? 'active' : ''}`}
-              onClick={() => setParam('cmp', compare ? '0' : '1')}
-              title="Compare against another period"
-            >
-              ⇄ Compare {compare ? 'on' : 'off'}
-            </button>
-          )}
+          <button
+            className={`toggle-btn ${compare ? 'active' : ''}`}
+            onClick={() => setParam('cmp', compare ? '0' : '1')}
+            title="Compare against another period"
+          >
+            ⇄ Compare {compare ? 'on' : 'off'}
+          </button>
 
-          {!isAll && compare && meta && (
+          {compare && meta && (
             <div className="date-range" title="Compare-to period">
               <span className="date-sep">vs</span>
               <input
@@ -273,7 +271,7 @@ export default function App() {
 
         {loading && <div className="loading">Loading data…</div>}
 
-        {!loading && isAll && overview && <Overview rows={overview.rows} onOpen={go} />}
+        {!loading && isAll && overview && <Overview rows={overview.rows} onOpen={go} compare={compare} />}
 
         {!loading && !isAll && detailReady && <PageTable pages={detail.pages} compare={compare} />}
       </main>

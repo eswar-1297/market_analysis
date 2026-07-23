@@ -43,11 +43,13 @@ export const api = {
   logout: () => auth.clear(),
   meta: () => get('/api/meta'),
   combinations: () => get('/api/combinations'),
-  overview: (start, end, country) => {
+  overview: (start, end, country, cstart, cend) => {
     const q = new URLSearchParams();
     if (start) q.set('start', start);
     if (end) q.set('end', end);
     if (country) q.set('country', country);
+    if (cstart) q.set('cstart', cstart);
+    if (cend) q.set('cend', cend);
     const qs = q.toString();
     return get(`/api/overview${qs ? '?' + qs : ''}`);
   },

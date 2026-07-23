@@ -167,6 +167,34 @@ export function overviewMock(combos, start, end, country = 'US') {
   return finalize(combos, agg);
 }
 
+function pctChange(cur, prev, lowerIsBetter = false) {
+  if (!cur && !prev) return null;
+  let pct = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
+  pct = Math.round(pct);
+  const eff = lowerIsBetter ? -pct : pct;
+  return { pct, dir: eff > 0 ? 'up' : eff < 0 ? 'down' : 'flat' };
+}
+
+// Attach per-combination deltas (current vs a comparison period's rows).
+export function withDeltas(curRows, prevRows) {
+  const prevById = {};
+  for (const r of prevRows) prevById[r.id] = r;
+  return curRows.map((r) => {
+    const p = prevById[r.id] || {};
+    return {
+      ...r,
+      deltas: {
+        position: pctChange(r.position, p.position || 0, true),
+        impressions: pctChange(r.impressions, p.impressions || 0),
+        clicks: pctChange(r.clicks, p.clicks || 0),
+        views: pctChange(r.views, p.views || 0),
+        bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true),
+        conversions: pctChange(r.conversions, p.conversions || 0),
+      },
+    };
+  });
+}
+
 export async function getOverview(combos, start, end, country) {
   if (modeFor('ga4') === 'live') {
     try {
