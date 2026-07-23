@@ -116,17 +116,10 @@ function pctChange(cur, prev, lowerIsBetter = false) {
 }
 
 function pageSummary(p, prev) {
-  // Avg engagement time per active user (seconds) = total engagement / users.
-  const engPerUser = (pg) => (pg && pg.activeUsers ? Math.round(pg.engagementDuration / pg.activeUsers) : 0);
   const cur = {
     views: p.views ?? 0,
-    activeUsers: p.activeUsers ?? 0,
     bounceRate: p.bounceRate ?? 0,
-    viewsPerUser: p.viewsPerUser ?? 0,
-    engagementPerUser: engPerUser(p),
-    sessions: pageMetric(p, 'ga4', 'sessions'),
     conversions: pageMetric(p, 'ga4', 'conversions'),
-    ppcLeads: p.ppcLeads ?? 0,
     clicks: pageMetric(p, 'searchConsole', 'clicks'),
     impressions: pageMetric(p, 'searchConsole', 'impressions'),
     position: pageWeightedPosition(p),
@@ -134,12 +127,8 @@ function pageSummary(p, prev) {
   const pv = prev
     ? {
         views: prev.views ?? 0,
-        activeUsers: prev.activeUsers ?? 0,
         bounceRate: prev.bounceRate ?? 0,
-        viewsPerUser: prev.viewsPerUser ?? 0,
-        engagementPerUser: engPerUser(prev),
         conversions: pageMetric(prev, 'ga4', 'conversions'),
-        ppcLeads: prev.ppcLeads ?? 0,
         clicks: pageMetric(prev, 'searchConsole', 'clicks'),
         impressions: pageMetric(prev, 'searchConsole', 'impressions'),
         position: pageWeightedPosition(prev),
@@ -151,17 +140,12 @@ function pageSummary(p, prev) {
     ...cur,
     deltas: {
       views: pctChange(cur.views, pv.views || 0),
-      activeUsers: pctChange(cur.activeUsers, pv.activeUsers || 0),
       bounceRate: pctChange(cur.bounceRate, pv.bounceRate || 0, true), // lower bounce is better
-      viewsPerUser: pctChange(cur.viewsPerUser, pv.viewsPerUser || 0),
-      engagementPerUser: pctChange(cur.engagementPerUser, pv.engagementPerUser || 0),
       conversions: pctChange(cur.conversions, pv.conversions || 0),
-      ppcLeads: pctChange(cur.ppcLeads, pv.ppcLeads || 0),
       clicks: pctChange(cur.clicks, pv.clicks || 0),
       impressions: pctChange(cur.impressions, pv.impressions || 0),
       position: pctChange(cur.position, pv.position || 0, true),
     },
-    cwv: null, // loaded lazily by the UI via /api/cwv
     modes: p.modes,
   };
 }

@@ -153,20 +153,10 @@ export async function ga4PageEngagement(url, start, end, country = 'US') {
     property: `properties/${config.ga4PropertyId}`,
     requestBody: {
       dateRanges: [{ startDate: start, endDate: end }],
-      metrics: [
-        { name: 'activeUsers' },
-        { name: 'bounceRate' },
-        { name: 'screenPageViewsPerUser' }, // views per active user
-        { name: 'userEngagementDuration' }, // total engagement seconds
-      ],
+      metrics: [{ name: 'bounceRate' }],
       dimensionFilter,
     },
   });
   const m = resp.data.rows && resp.data.rows[0] ? resp.data.rows[0].metricValues : null;
-  return {
-    activeUsers: m ? Number(m[0].value || 0) : 0,
-    bounceRate: m ? Number(Number(m[1].value || 0).toFixed(3)) : 0,
-    viewsPerUser: m ? Number(Number(m[2].value || 0).toFixed(2)) : 0,
-    engagementDuration: m ? Number(m[3].value || 0) : 0, // seconds (total)
-  };
+  return { bounceRate: m ? Number(Number(m[0].value || 0).toFixed(3)) : 0 };
 }
