@@ -225,8 +225,20 @@ app.put('/api/combinations/:id/owners', (req, res) => {
 // Serve the built React app in production (npm run build -> client/dist).
 const dist = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(dist)) {
-  app.use(express.static(dist));
-  app.get('*', (req, res) => res.sendFile(path.join(dist, 'index.html')));
+  // Hashed assets can cache forever; index.html must NOT be cached so a rebuild
+  // always serves the newest bundle (prevents stale UI after redeploys).
+  app.use(
+    express.static(dist, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        else if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      },
+    })
+  );
+  app.get('*', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(path.join(dist, 'index.html'));
+  });
 }
 
 app.listen(config.port, () => {
