@@ -34,7 +34,6 @@ export default function App() {
   const [overview, setOverview] = useState(null);
   const [authorsList, setAuthorsList] = useState([]);
   const [authorData, setAuthorData] = useState(null);
-  const [authors, setAuthors] = useState(undefined); // undefined = loading
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -120,23 +119,6 @@ export default function App() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [authed, authorMode, author, start, end, country, compare, cstart, cend]);
-
-  // Article authors for the selected combination (top-right badge).
-  useEffect(() => {
-    if (!authed || !comboId) {
-      setAuthors([]);
-      return;
-    }
-    setAuthors(undefined);
-    let cancelled = false;
-    api
-      .authors(comboId)
-      .then((d) => !cancelled && setAuthors(d.authors))
-      .catch(() => !cancelled && setAuthors([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [comboId]);
 
   const range = start && end ? { start, end } : null;
 
@@ -290,20 +272,6 @@ export default function App() {
       <main className="main">
         <div className="title-row">
           <h1 className="h1">{title}</h1>
-          {comboId && (
-            <div className="authors">
-              {authors === undefined ? (
-                <span className="spinner" />
-              ) : authors.length ? (
-                <>
-                  <span className="authors-label">{authors.length > 1 ? 'Authors' : 'Author'}</span>
-                  <span className="authors-names">✍ {authors.join(', ')}</span>
-                </>
-              ) : (
-                <span className="authors-names" style={{ color: 'var(--muted)' }}>No author found</span>
-              )}
-            </div>
-          )}
         </div>
 
         {error && <div className="warn-banner">Error: {error}</div>}

@@ -8,6 +8,7 @@ import { mockPage } from '../connectors/mock.js';
 import { ga4Page, ga4PageViews, ga4PageEngagement } from '../connectors/ga4.js';
 import { searchConsolePage } from '../connectors/searchConsole.js';
 import { adsPage } from '../connectors/googleAds.js';
+import { pageAuthor } from '../connectors/authors.js';
 
 async function withFallback(source, liveFn, fallback, errors) {
   if (modeFor(source) !== 'live') return { data: fallback, mode: 'sample' };
@@ -37,6 +38,7 @@ export async function fetchPageAll(page, start, end, country = 'US', includeView
   // table + comparison. Both are pagePath-scoped to match GA4's Pages report.
   let views = null;
   let bounceRate = null;
+  let author = null;
   if (includeViews) {
     const sSessions = sample.ga4.reduce((a, d) => a + d.sessions, 0);
     const sEng = sample.ga4.reduce((a, d) => a + d.engagementRate, 0) / (sample.ga4.length || 1);
@@ -53,6 +55,7 @@ export async function fetchPageAll(page, start, end, country = 'US', includeView
       views = sampleViews;
       bounceRate = sampleBounce;
     }
+    author = await pageAuthor(url); // scraped once, cached
   }
 
   return {
@@ -63,6 +66,7 @@ export async function fetchPageAll(page, start, end, country = 'US', includeView
     ads: ads.data,
     views,
     bounceRate,
+    author,
     modes: { ga4: ga4.mode, searchConsole: sc.mode, ads: ads.mode },
     errors,
   };

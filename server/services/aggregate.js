@@ -137,6 +137,7 @@ function pageSummary(p, prev) {
   return {
     url: p.url,
     label: p.label,
+    author: p.author || null,
     ...cur,
     deltas: {
       views: pctChange(cur.views, pv.views || 0),
