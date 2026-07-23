@@ -207,12 +207,14 @@ export default function App() {
             </div>
           )}
 
+        </div>
+
+        <div className="appbar-right">
           {meta && (
             <span className={`mode-pill ${meta.dataMode}`}>
               {meta.dataMode === 'live' ? '● Live' : '● Sample'}
             </span>
           )}
-
           <button
             className="toggle-btn"
             onClick={() => {

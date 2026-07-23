@@ -86,8 +86,8 @@ body {
 .appbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
+  gap: 14px;
   flex-wrap: wrap;
   padding: 14px 30px;
   background: var(--surface);
@@ -97,6 +97,8 @@ body {
   z-index: 20;
   box-shadow: var(--shadow-sm);
 }
+/* Live + Log out stay pinned to the right so the left controls never shift. */
+.appbar-right { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .appbar .brand {
   font-family: var(--font-display);
   font-size: 18px;
