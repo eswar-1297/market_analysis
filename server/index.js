@@ -126,9 +126,12 @@ app.get('/api/combinations/:id', async (req, res) => {
     const start = req.query.start || range.start;
     const end = req.query.end || range.end;
     const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
-    // Current + previous period (for the Google-Analytics-style comparison).
-    // Neither fetches CWV (that's lazy via /api/cwv), so both stay fast.
-    const prev = previousPeriod(start, end);
+    // Current + comparison period. The client can supply a custom compare range
+    // (cstart/cend, GA-style); otherwise we use the auto previous period.
+    const prev =
+      req.query.cstart && req.query.cend
+        ? { start: req.query.cstart, end: req.query.cend }
+        : previousPeriod(start, end);
     const [currentPages, previousPages] = await Promise.all([
       fetchCombinationPages(combo.pages, start, end, country, true),
       fetchCombinationPages(combo.pages, prev.start, prev.end, country, true),

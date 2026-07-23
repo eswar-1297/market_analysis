@@ -8,6 +8,19 @@ function daysBetween(start, end) {
   return Math.round((new Date(end) - new Date(start)) / 86400000) + 1;
 }
 
+// The equal-length period immediately before [start, end] — the default compare range.
+function previousPeriod(start, end) {
+  if (!start || !end) return { start: '', end: '' };
+  const s = new Date(start + 'T00:00:00Z');
+  const days = daysBetween(start, end);
+  const pe = new Date(s);
+  pe.setUTCDate(pe.getUTCDate() - 1);
+  const ps = new Date(pe);
+  ps.setUTCDate(ps.getUTCDate() - (days - 1));
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { start: iso(ps), end: iso(pe) };
+}
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -30,6 +43,10 @@ export default function App() {
   const end = searchParams.get('end') || meta?.defaultRange.end || '';
   const maxDate = meta?.defaultRange.end || '';
   const rangeDays = start && end ? daysBetween(start, end) : 0;
+  // Comparison period — custom (GA-style) or defaults to the previous period.
+  const prevDefault = previousPeriod(start, end);
+  const cstart = searchParams.get('cstart') || prevDefault.start;
+  const cend = searchParams.get('cend') || prevDefault.end;
 
   const go = (id) => {
     const qs = searchParams.toString();
@@ -88,11 +105,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     api
-      .combination(selectedId, start, end, country)
+      .combination(selectedId, start, end, country, compare ? cstart : null, compare ? cend : null)
       .then(setDetail)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [selectedId, start, end, country, authed]);
+  }, [selectedId, start, end, country, authed, compare, cstart, cend]);
 
   const selectedCombo = combos.find((c) => c.id === selectedId);
   const detailReady = detail && detail.id === selectedId;
@@ -163,10 +180,32 @@ export default function App() {
           <button
             className={`toggle-btn ${compare ? 'active' : ''}`}
             onClick={() => setParam('cmp', compare ? '0' : '1')}
-            title="Show % change vs the previous period"
+            title="Compare against another period"
           >
             ⇄ Compare {compare ? 'on' : 'off'}
           </button>
+
+          {compare && meta && (
+            <div className="date-range" title="Compare-to period">
+              <span className="date-sep">vs</span>
+              <input
+                type="date"
+                className="date-input"
+                value={cstart}
+                max={cend || maxDate}
+                onChange={(e) => e.target.value && setParam('cstart', e.target.value)}
+              />
+              <span className="date-sep">→</span>
+              <input
+                type="date"
+                className="date-input"
+                value={cend}
+                min={cstart}
+                max={maxDate}
+                onChange={(e) => e.target.value && setParam('cend', e.target.value)}
+              />
+            </div>
+          )}
 
           {meta && (
             <span className={`mode-pill ${meta.dataMode}`}>
