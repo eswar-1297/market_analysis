@@ -30,7 +30,7 @@ export default function App() {
   const [meta, setMeta] = useState(null);
   const [combos, setCombos] = useState([]);
   const [detail, setDetail] = useState(null);
-  const [authors, setAuthors] = useState(undefined); // undefined = loading
+  const [authorInfo, setAuthorInfo] = useState(undefined); // {authors, byPage}; undefined = loading
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -84,19 +84,19 @@ export default function App() {
   // Article authors for the selected combination (top-right badge).
   useEffect(() => {
     if (!authed || !comboId) {
-      setAuthors([]);
+      setAuthorInfo({ authors: [], byPage: {} });
       return;
     }
-    setAuthors(undefined);
+    setAuthorInfo(undefined);
     let cancelled = false;
     api
       .authors(comboId)
-      .then((d) => !cancelled && setAuthors(d.authors))
-      .catch(() => !cancelled && setAuthors([]));
+      .then((d) => !cancelled && setAuthorInfo(d))
+      .catch(() => !cancelled && setAuthorInfo({ authors: [], byPage: {} }));
     return () => {
       cancelled = true;
     };
-  }, [comboId]);
+  }, [comboId, authed]);
 
   const range = start && end ? { start, end } : null;
 
@@ -232,12 +232,12 @@ export default function App() {
         <div className="title-row">
           <h1 className="h1">{title}</h1>
           <div className="authors">
-            {authors === undefined ? (
+            {authorInfo === undefined ? (
               <span className="spinner" />
-            ) : authors.length ? (
+            ) : authorInfo.authors.length ? (
               <>
-                <span className="authors-label">{authors.length > 1 ? 'Authors' : 'Author'}</span>
-                <span className="authors-names">✍ {authors.join(', ')}</span>
+                <span className="authors-label">{authorInfo.authors.length > 1 ? 'Authors' : 'Author'}</span>
+                <span className="authors-names">✍ {authorInfo.authors.join(', ')}</span>
               </>
             ) : (
               <span className="authors-names" style={{ color: 'var(--muted)' }}>No author found</span>
@@ -257,7 +257,14 @@ export default function App() {
 
         {loading && <div className="loading">Loading data…</div>}
 
-        {!loading && detailReady && <PageTable pages={detail.pages} compare={compare} />}
+        {!loading && detailReady && (
+          <PageTable
+            pages={detail.pages}
+            compare={compare}
+            authorsByPage={authorInfo?.byPage || {}}
+            authors={authorInfo?.authors || []}
+          />
+        )}
       </main>
     </div>
   );

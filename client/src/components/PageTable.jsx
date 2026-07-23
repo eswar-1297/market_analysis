@@ -14,8 +14,6 @@ function Delta({ d }) {
   );
 }
 
-// A metric cell: current value on top, % change vs previous period beneath
-// (the delta only shows when comparison is toggled on).
 function Metric({ value, delta, display, compare }) {
   return (
     <td>
@@ -25,10 +23,12 @@ function Metric({ value, delta, display, compare }) {
   );
 }
 
-export default function PageTable({ pages, compare = true }) {
-  // Performance score loads lazily per page (slow PageSpeed call), so the table
-  // renders instantly and the Perf. cell fills in when ready.
-  const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
+export default function PageTable({ pages, compare = true, authorsByPage = {}, authors = [] }) {
+  const [perf, setPerf] = useState({}); // url -> score | null; undefined = loading
+  const [authorFilter, setAuthorFilter] = useState('all');
+
+  // Reset the author filter when switching combinations.
+  useEffect(() => setAuthorFilter('all'), [pages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,9 +44,31 @@ export default function PageTable({ pages, compare = true }) {
     };
   }, [pages]);
 
+  const shown =
+    authorFilter === 'all' ? pages : pages.filter((p) => (authorsByPage[p.url] || '') === authorFilter);
+
   return (
     <div>
-      <div className="section-title">Pages ({pages.length})</div>
+      <div className="pages-head">
+        <div className="section-title" style={{ margin: 0 }}>
+          Pages ({shown.length}
+          {authorFilter !== 'all' ? ` of ${pages.length}` : ''})
+        </div>
+        {authors.length > 1 && (
+          <label className="author-filter">
+            <span>Author</span>
+            <select value={authorFilter} onChange={(e) => setAuthorFilter(e.target.value)}>
+              <option value="all">All authors</option>
+              {authors.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
       <div className="table-card">
         <table>
           <thead>
@@ -62,15 +84,17 @@ export default function PageTable({ pages, compare = true }) {
             </tr>
           </thead>
           <tbody>
-            {pages.map((p) => {
+            {shown.map((p) => {
               const dl = p.deltas || {};
               const score = perf[p.url];
+              const author = authorsByPage[p.url];
               return (
                 <tr key={p.url}>
                   <td>
                     <a href={p.url} target="_blank" rel="noreferrer" title={p.url}>
                       {p.label}
                     </a>
+                    {author && <div className="page-author">✍ {author}</div>}
                   </td>
                   <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
                   <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
@@ -87,6 +111,13 @@ export default function PageTable({ pages, compare = true }) {
                 </tr>
               );
             })}
+            {!shown.length && (
+              <tr>
+                <td colSpan={8} style={{ color: 'var(--muted)' }}>
+                  No pages by this author.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

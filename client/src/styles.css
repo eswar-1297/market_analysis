@@ -391,6 +391,23 @@ td a:hover { text-decoration: underline; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .section-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; margin: 4px 0 14px; letter-spacing: -0.2px; color: var(--ink); }
+.pages-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 4px 0 14px; flex-wrap: wrap; }
+.author-filter { display: flex; align-items: center; gap: 8px; }
+.author-filter span { color: var(--muted); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+.author-filter select {
+  padding: 7px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.author-filter select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+.page-author { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .empty, .loading { color: var(--muted); padding: 48px; text-align: center; }
 .warn-banner { background: var(--warn-bg); border: 1px solid #f0d9a8; color: #8a5a00; padding: 11px 16px; border-radius: 10px; font-size: 12.5px; margin-bottom: 18px; }
 
