@@ -193,7 +193,7 @@ export default function App() {
             onChange={(e) => go(e.target.value)}
             title="Select a view"
           >
-            <option value="__all__">All combinations</option>
+            <option value="__all__">All combinations ({combos.length})</option>
             <optgroup label="Combinations">
               {combos.map((c) => (
                 <option key={c.id} value={c.id}>

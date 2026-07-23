@@ -24,7 +24,6 @@ function Cell({ value, delta, display, compare }) {
 export default function Overview({ rows, onOpen, compare = false }) {
   return (
     <div>
-      <div className="section-title">All combinations ({rows.length})</div>
       <div className="table-card">
         <table>
           <thead>
