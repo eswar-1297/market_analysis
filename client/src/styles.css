@@ -85,11 +85,9 @@ body {
 /* ---------- Top app bar ---------- */
 .appbar {
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  flex-direction: column;
   gap: 14px;
-  flex-wrap: wrap;
-  padding: 14px 30px;
+  padding: 16px 30px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -97,8 +95,9 @@ body {
   z-index: 20;
   box-shadow: var(--shadow-sm);
 }
-/* Live + Log out stay pinned to the right so the left controls never shift. */
-.appbar-right { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+/* Row 1: brand on the left, Live + Log out on the right. */
+.appbar-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.appbar-right { display: flex; align-items: center; gap: 12px; }
 .appbar .brand {
   font-family: var(--font-display);
   font-size: 18px;

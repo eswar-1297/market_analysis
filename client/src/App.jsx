@@ -123,8 +123,27 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="appbar">
-        <div className="brand">
-          Cloud<span>Fuze</span> Marketing
+        <div className="appbar-top">
+          <div className="brand">
+            Cloud<span>Fuze</span> Marketing
+          </div>
+          <div className="appbar-right">
+            {meta && (
+              <span className={`mode-pill ${meta.dataMode}`}>
+                {meta.dataMode === 'live' ? '● Live' : '● Sample'}
+              </span>
+            )}
+            <button
+              className="toggle-btn"
+              onClick={() => {
+                api.logout();
+                setAuthed(false);
+              }}
+              title="Log out"
+            >
+              Log out
+            </button>
+          </div>
         </div>
 
         <div className="appbar-controls">
@@ -206,25 +225,6 @@ export default function App() {
               />
             </div>
           )}
-
-        </div>
-
-        <div className="appbar-right">
-          {meta && (
-            <span className={`mode-pill ${meta.dataMode}`}>
-              {meta.dataMode === 'live' ? '● Live' : '● Sample'}
-            </span>
-          )}
-          <button
-            className="toggle-btn"
-            onClick={() => {
-              api.logout();
-              setAuthed(false);
-            }}
-            title="Log out"
-          >
-            Log out
-          </button>
         </div>
       </header>
 
