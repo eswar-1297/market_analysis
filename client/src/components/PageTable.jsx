@@ -62,40 +62,6 @@ export default function PageTable({ pages, compare = true }) {
             </tr>
           </thead>
           <tbody>
-            {pages.length > 1 && (() => {
-              // Cumulative across all pages: sums for counts, impression-weighted
-              // position, view-weighted bounce rate, average performance.
-              const t = pages.reduce(
-                (a, p) => {
-                  a.impressions += p.impressions || 0;
-                  a.clicks += p.clicks || 0;
-                  a.views += p.views || 0;
-                  a.conversions += p.conversions || 0;
-                  a.posW += (p.position || 0) * (p.impressions || 0);
-                  a.posI += p.impressions || 0;
-                  a.bounceW += (p.bounceRate || 0) * (p.views || 0);
-                  a.bounceV += p.views || 0;
-                  return a;
-                },
-                { impressions: 0, clicks: 0, views: 0, conversions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 }
-              );
-              const scores = pages.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
-              const anyPerfLoaded = pages.some((p) => perf[p.url] !== undefined);
-              return (
-                <tr className="total-row">
-                  <td>All pages ({pages.length})</td>
-                  <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
-                  <td>{fmt(t.impressions)}</td>
-                  <td>{fmt(t.clicks)}</td>
-                  <td>{fmt(t.views)}</td>
-                  <td>{t.bounceV ? Math.round((t.bounceW / t.bounceV) * 100) + '%' : '—'}</td>
-                  <td>{fmt(t.conversions)}</td>
-                  <td>
-                    {!anyPerfLoaded ? <span className="spinner" /> : scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : '—'}
-                  </td>
-                </tr>
-              );
-            })()}
             {pages.map((p) => {
               const dl = p.deltas || {};
               const score = perf[p.url];
@@ -121,6 +87,40 @@ export default function PageTable({ pages, compare = true }) {
                 </tr>
               );
             })}
+            {pages.length > 1 && (() => {
+              // Cumulative row at the bottom: sums for counts, impression-weighted
+              // position, view-weighted bounce rate, average performance.
+              const t = pages.reduce(
+                (a, p) => {
+                  a.impressions += p.impressions || 0;
+                  a.clicks += p.clicks || 0;
+                  a.views += p.views || 0;
+                  a.conversions += p.conversions || 0;
+                  a.posW += (p.position || 0) * (p.impressions || 0);
+                  a.posI += p.impressions || 0;
+                  a.bounceW += (p.bounceRate || 0) * (p.views || 0);
+                  a.bounceV += p.views || 0;
+                  return a;
+                },
+                { impressions: 0, clicks: 0, views: 0, conversions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 }
+              );
+              const scores = pages.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
+              const anyPerfLoaded = pages.some((p) => perf[p.url] !== undefined);
+              return (
+                <tr className="total-row">
+                  <td></td>
+                  <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
+                  <td>{fmt(t.impressions)}</td>
+                  <td>{fmt(t.clicks)}</td>
+                  <td>{fmt(t.views)}</td>
+                  <td>{t.bounceV ? Math.round((t.bounceW / t.bounceV) * 100) + '%' : '—'}</td>
+                  <td>{fmt(t.conversions)}</td>
+                  <td>
+                    {!anyPerfLoaded ? <span className="spinner" /> : scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : '—'}
+                  </td>
+                </tr>
+              );
+            })()}
           </tbody>
         </table>
       </div>

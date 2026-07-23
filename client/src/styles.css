@@ -390,7 +390,7 @@ td a:hover { text-decoration: underline; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.total-row td { background: var(--brand-wash); font-weight: 700; color: var(--ink); border-bottom: 2px solid var(--line-strong); }
+.total-row td { background: var(--brand-wash); font-weight: 700; color: var(--ink); border-top: 2px solid var(--line-strong); }
 
 .section-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; margin: 4px 0 14px; letter-spacing: -0.2px; color: var(--ink); }
 .empty, .loading { color: var(--muted); padding: 48px; text-align: center; }
