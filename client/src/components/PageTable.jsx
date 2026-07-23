@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
+
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
 function Delta({ d }) {
@@ -23,6 +26,24 @@ function Metric({ value, delta, display, compare }) {
 }
 
 export default function PageTable({ pages, compare = true }) {
+  // Performance score loads lazily per page (slow PageSpeed call), so the table
+  // renders instantly and the Perf. cell fills in when ready.
+  const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
+
+  useEffect(() => {
+    let cancelled = false;
+    setPerf({});
+    for (const p of pages) {
+      api
+        .cwv(p.url)
+        .then((d) => !cancelled && setPerf((s) => ({ ...s, [p.url]: d.performanceScore })))
+        .catch(() => !cancelled && setPerf((s) => ({ ...s, [p.url]: null })));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [pages]);
+
   return (
     <div>
       <div className="section-title">Pages ({pages.length})</div>
@@ -37,11 +58,13 @@ export default function PageTable({ pages, compare = true }) {
               <th>Organic clicks</th>
               <th>Impressions</th>
               <th>Avg. position</th>
+              <th>Perf.</th>
             </tr>
           </thead>
           <tbody>
             {pages.map((p) => {
               const dl = p.deltas || {};
+              const score = perf[p.url];
               return (
                 <tr key={p.url}>
                   <td>
@@ -60,6 +83,7 @@ export default function PageTable({ pages, compare = true }) {
                   <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
                   <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
                   <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
+                  <td>{score === undefined ? <span className="spinner" /> : score != null ? score : '—'}</td>
                 </tr>
               );
             })}
