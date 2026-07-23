@@ -51,7 +51,6 @@ export default function PageTable({ pages, compare = true }) {
           <thead>
             <tr>
               <th>Page</th>
-              <th>Author</th>
               <th>Avg. position</th>
               <th>Impressions</th>
               <th>Organic clicks</th>
@@ -71,8 +70,8 @@ export default function PageTable({ pages, compare = true }) {
                     <a href={p.url} target="_blank" rel="noreferrer" title={p.url}>
                       {p.label}
                     </a>
+                    {p.author && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{p.author}</div>}
                   </td>
-                  <td style={{ color: 'var(--ink-soft)' }}>{p.author || '—'}</td>
                   <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
                   <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
                   <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
@@ -109,7 +108,6 @@ export default function PageTable({ pages, compare = true }) {
               const anyPerfLoaded = pages.some((p) => perf[p.url] !== undefined);
               return (
                 <tr className="total-row">
-                  <td></td>
                   <td></td>
                   <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
                   <td>{fmt(t.impressions)}</td>
