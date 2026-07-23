@@ -52,12 +52,12 @@ export default function PageTable({ pages, compare = true }) {
           <thead>
             <tr>
               <th>Page</th>
+              <th>Avg. position</th>
+              <th>Impressions</th>
+              <th>Organic clicks</th>
               <th>Views</th>
               <th>Bounce rate</th>
               <th>Conversions</th>
-              <th>Organic clicks</th>
-              <th>Impressions</th>
-              <th>Avg. position</th>
               <th>Perf.</th>
             </tr>
           </thead>
@@ -72,6 +72,9 @@ export default function PageTable({ pages, compare = true }) {
                       {p.label}
                     </a>
                   </td>
+                  <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
+                  <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
+                  <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
                   <Metric value={p.views} delta={dl.views} compare={compare} />
                   <Metric
                     value={p.bounceRate}
@@ -80,9 +83,6 @@ export default function PageTable({ pages, compare = true }) {
                     compare={compare}
                   />
                   <Metric value={p.conversions} delta={dl.conversions} compare={compare} />
-                  <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
-                  <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
-                  <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
                   <td>{score === undefined ? <span className="spinner" /> : score != null ? score : '—'}</td>
                 </tr>
               );
