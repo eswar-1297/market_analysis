@@ -204,14 +204,6 @@ export default function App() {
           </div>
         </div>
 
-        {range && (
-          <div className="crumb">
-            {regionLabel} · {range.start} → {range.end}
-            {pageCount != null ? ` · ${pageCount} page${pageCount === 1 ? '' : 's'}` : ''}
-            {compare ? ` · % change vs previous ${rangeDays} days` : ''}
-          </div>
-        )}
-
         {error && <div className="warn-banner">Error: {error}</div>}
         {hasErrors && (
           <div className="warn-banner">
