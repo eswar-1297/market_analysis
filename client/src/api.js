@@ -65,6 +65,16 @@ export const api = {
   },
   cwv: (url) => get(`/api/cwv?url=${encodeURIComponent(url)}`),
   authors: (id) => get(`/api/authors?id=${encodeURIComponent(id)}`),
+  authorsIndex: () => get('/api/authors-index'),
+  author: (name, start, end, country, cstart, cend) => {
+    const q = new URLSearchParams({ name });
+    if (start) q.set('start', start);
+    if (end) q.set('end', end);
+    if (country) q.set('country', country);
+    if (cstart) q.set('cstart', cstart);
+    if (cend) q.set('cend', cend);
+    return get(`/api/author?${q.toString()}`);
+  },
   saveOwners: async (id, owners) => {
     const res = await fetch(`/api/combinations/${id}/owners`, {
       method: 'PUT',

@@ -32,13 +32,17 @@ export default function App() {
   const [combos, setCombos] = useState([]);
   const [detail, setDetail] = useState(null);
   const [overview, setOverview] = useState(null);
+  const [authorsList, setAuthorsList] = useState([]);
+  const [authorData, setAuthorData] = useState(null);
   const [authors, setAuthors] = useState(undefined); // undefined = loading
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const path = location.pathname;
   const comboId = path.startsWith('/c/') ? decodeURIComponent(path.slice(3)) : null;
-  const isAll = !comboId; // "/" (or anything not /c/:id) = all-combinations overview
+  const author = searchParams.get('author') || '';
+  const authorMode = !comboId && !!author; // "/?author=X" = one writer's pages
+  const overviewMode = !comboId && !author; // "/" = all-combinations overview
   const selectedId = comboId;
   const country = searchParams.get('region') || 'US';
   const compare = searchParams.get('cmp') !== '0'; // comparison on by default
@@ -52,9 +56,18 @@ export default function App() {
   const cend = searchParams.get('cend') || prevDefault.end;
 
   const go = (id) => {
-    const qs = searchParams.toString();
+    const sp = new URLSearchParams(searchParams);
+    sp.delete('author'); // choosing a combination clears the author filter
+    const qs = sp.toString();
     const p = id === '__all__' ? '/' : `/c/${id}`;
     navigate(qs ? `${p}?${qs}` : p);
+  };
+  const goAuthor = (name) => {
+    const sp = new URLSearchParams(searchParams);
+    if (name) sp.set('author', name);
+    else sp.delete('author');
+    const qs = sp.toString();
+    navigate(qs ? `/?${qs}` : '/'); // author view lives at the root path
   };
   const setParam = (key, value) => {
     const sp = new URLSearchParams(searchParams);
@@ -78,9 +91,15 @@ export default function App() {
     })().catch((e) => setError(e.message));
   }, [authed]);
 
+  // Author list for the filter dropdown (scrapes once server-side, cached).
+  useEffect(() => {
+    if (!authed) return;
+    api.authorsIndex().then((d) => setAuthorsList(d.authors)).catch(() => {});
+  }, [authed]);
+
   // All-combinations overview (default view).
   useEffect(() => {
-    if (!authed || !isAll || !start || !end) return;
+    if (!authed || !overviewMode || !start || !end) return;
     setLoading(true);
     setError(null);
     api
@@ -88,7 +107,19 @@ export default function App() {
       .then(setOverview)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [authed, isAll, start, end, country, compare, cstart, cend]);
+  }, [authed, overviewMode, start, end, country, compare, cstart, cend]);
+
+  // One author's pages across all combinations.
+  useEffect(() => {
+    if (!authed || !authorMode || !start || !end) return;
+    setLoading(true);
+    setError(null);
+    api
+      .author(author, start, end, country, compare ? cstart : null, compare ? cend : null)
+      .then(setAuthorData)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [authed, authorMode, author, start, end, country, compare, cstart, cend]);
 
   // Article authors for the selected combination (top-right badge).
   useEffect(() => {
@@ -123,7 +154,7 @@ export default function App() {
   const selectedCombo = combos.find((c) => c.id === selectedId);
   const detailReady = detail && detail.id === selectedId;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
-  const title = isAll ? 'All combinations' : selectedCombo ? selectedCombo.name : 'Loading…';
+  const title = comboId ? (selectedCombo ? selectedCombo.name : 'Loading…') : authorMode ? `Author: ${author}` : 'All combinations';
   const regionLabel = meta?.regions.find((r) => r.code === country)?.label || country;
   const pageCount = selectedCombo?.pageCount;
 
@@ -158,7 +189,7 @@ export default function App() {
         <div className="appbar-controls">
           <select
             className="combo-select"
-            value={isAll ? '__all__' : selectedId || ''}
+            value={comboId ? selectedId : '__all__'}
             onChange={(e) => go(e.target.value)}
             title="Select a view"
           >
@@ -171,6 +202,22 @@ export default function App() {
               ))}
             </optgroup>
           </select>
+
+          {authorsList.length > 0 && (
+            <select
+              className="region-select"
+              value={author}
+              onChange={(e) => goAuthor(e.target.value)}
+              title="Filter by author"
+            >
+              <option value="">All authors</option>
+              {authorsList.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name} ({a.pageCount})
+                </option>
+              ))}
+            </select>
+          )}
 
           {meta && (
             <select
@@ -243,7 +290,7 @@ export default function App() {
       <main className="main">
         <div className="title-row">
           <h1 className="h1">{title}</h1>
-          {!isAll && (
+          {comboId && (
             <div className="authors">
               {authors === undefined ? (
                 <span className="spinner" />
@@ -271,9 +318,17 @@ export default function App() {
 
         {loading && <div className="loading">Loading data…</div>}
 
-        {!loading && isAll && overview && <Overview rows={overview.rows} onOpen={go} compare={compare} />}
+        {!loading && overviewMode && overview && <Overview rows={overview.rows} onOpen={go} compare={compare} />}
 
-        {!loading && !isAll && detailReady && <PageTable pages={detail.pages} compare={compare} />}
+        {!loading && authorMode && authorData && (
+          authorData.pages.length ? (
+            <PageTable pages={authorData.pages} compare={compare} />
+          ) : (
+            <div className="loading">No pages found for this author.</div>
+          )
+        )}
+
+        {!loading && comboId && detailReady && <PageTable pages={detail.pages} compare={compare} />}
       </main>
     </div>
   );

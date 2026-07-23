@@ -182,6 +182,64 @@ app.get('/api/authors', async (req, res) => {
   res.json({ authors, byPage });
 });
 
+// Author index: scrape every page's author once (cached), group pages by author.
+let authorIndex = null;
+let authorIndexAt = 0;
+async function buildAuthorIndex() {
+  if (authorIndex && Date.now() - authorIndexAt < 60 * 60 * 1000) return authorIndex;
+  const data = loadCombinations();
+  const byAuthor = {};
+  await Promise.all(
+    data.combinations.flatMap((c) =>
+      c.pages.map(async (pg) => {
+        const name = await pageAuthor(pg.url);
+        if (!name) return;
+        (byAuthor[name] = byAuthor[name] || []).push({ url: pg.url, label: pg.label, combo: c.name });
+      })
+    )
+  );
+  authorIndex = { authors: Object.keys(byAuthor).sort(), byAuthor };
+  authorIndexAt = Date.now();
+  return authorIndex;
+}
+
+app.get('/api/authors-index', async (req, res) => {
+  try {
+    const idx = await buildAuthorIndex();
+    res.json({ authors: idx.authors.map((a) => ({ name: a, pageCount: idx.byAuthor[a].length })) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// All pages by a given author (across every combination), with metrics + deltas.
+app.get('/api/author', async (req, res) => {
+  try {
+    const name = req.query.name;
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const idx = await buildAuthorIndex();
+    const pages = idx.byAuthor[name] || [];
+    const range = defaultRange();
+    const start = req.query.start || range.start;
+    const end = req.query.end || range.end;
+    const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
+    if (!pages.length) return res.json({ id: 'author', name, pages: [], range: { start, end }, country });
+    const prev =
+      req.query.cstart && req.query.cend
+        ? { start: req.query.cstart, end: req.query.cend }
+        : previousPeriod(start, end);
+    const [currentPages, previousPages] = await Promise.all([
+      fetchCombinationPages(pages, start, end, country, true),
+      fetchCombinationPages(pages, prev.start, prev.end, country, true),
+    ]);
+    const result = aggregateCombination({ id: 'author', name, owners: {}, pages }, currentPages, previousPages);
+    res.json({ ...result, range: { start, end }, country, dataMode: overallMode() });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Lazy Core Web Vitals for a single page (loaded per-row by the UI so the
 // slow PageSpeed call never blocks the main view). Cached 6h in the connector.
 function cwvStatus(metric, value) {
