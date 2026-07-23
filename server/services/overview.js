@@ -170,7 +170,7 @@ export function overviewMock(combos, start, end, country = 'US') {
 function pctChange(cur, prev, lowerIsBetter = false) {
   if (!cur && !prev) return null;
   let pct = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
-  pct = Math.round(pct);
+  pct = Math.round(pct) || 0; // normalize -0 (and NaN) to 0
   const eff = lowerIsBetter ? -pct : pct;
   return { pct, dir: eff > 0 ? 'up' : eff < 0 ? 'down' : 'flat' };
 }

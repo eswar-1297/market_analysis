@@ -110,7 +110,7 @@ const pageMetric = (p, src, f) => Math.round(total(p[src].map((d) => ({ value: d
 function pctChange(cur, prev, lowerIsBetter = false) {
   if (!cur && !prev) return null; // nothing to compare
   let pct = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
-  pct = Math.round(pct);
+  pct = Math.round(pct) || 0; // normalize -0 (and NaN) to 0
   const effective = lowerIsBetter ? -pct : pct;
   return { pct, dir: effective > 0 ? 'up' : effective < 0 ? 'down' : 'flat' };
 }
