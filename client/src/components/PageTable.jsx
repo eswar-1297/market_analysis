@@ -46,7 +46,6 @@ export default function PageTable({ pages, compare = true }) {
 
   return (
     <div>
-      <div className="section-title">Pages ({pages.length})</div>
       <div className="table-card">
         <table>
           <thead>
