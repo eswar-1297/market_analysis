@@ -273,6 +273,31 @@ app.get('/api/cwv', async (req, res) => {
   }
 });
 
+// Average performance score for a combination (avg of its pages' PageSpeed
+// scores). Lazy per-row on the overview; cached 6h in the connector.
+app.get('/api/combo-perf', async (req, res) => {
+  try {
+    const data = loadCombinations();
+    const combo = data.combinations.find((c) => c.id === req.query.id);
+    if (!combo) return res.status(404).json({ error: 'Combination not found' });
+    const scores = [];
+    await Promise.all(
+      combo.pages.map(async (pg) => {
+        try {
+          const d = await pagespeedPage(pg.url);
+          if (typeof d.performanceScore === 'number') scores.push(d.performanceScore);
+        } catch {
+          /* skip page on error */
+        }
+      })
+    );
+    const perf = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+    res.json({ id: combo.id, perf });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/ppc', async (req, res) => {
   const range = defaultRange();
   const start = req.query.start || range.start;

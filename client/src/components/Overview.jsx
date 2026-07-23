@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
+
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
 function Delta({ d }) {
@@ -22,6 +25,23 @@ function Cell({ value, delta, display, compare }) {
 
 // All combinations at a glance. Click a row to drill into that combination.
 export default function Overview({ rows, onOpen, compare = false }) {
+  // Average performance per combination — loaded lazily (slow PageSpeed calls).
+  const [perf, setPerf] = useState({}); // id -> score | null; undefined = loading
+
+  useEffect(() => {
+    let cancelled = false;
+    setPerf({});
+    for (const r of rows) {
+      api
+        .comboPerf(r.id)
+        .then((d) => !cancelled && setPerf((s) => ({ ...s, [r.id]: d.perf })))
+        .catch(() => !cancelled && setPerf((s) => ({ ...s, [r.id]: null })));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
+
   return (
     <div>
       <div className="table-card">
@@ -35,6 +55,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
               <th>Views</th>
               <th>Bounce rate</th>
               <th>Conversions</th>
+              <th>Perf.</th>
             </tr>
           </thead>
           <tbody>
@@ -57,6 +78,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
                     compare={compare}
                   />
                   <Cell value={r.conversions} delta={dl.conversions} compare={compare} />
+                  <td>{perf[r.id] === undefined ? <span className="spinner" /> : perf[r.id] != null ? perf[r.id] : '—'}</td>
                 </tr>
               );
             })}

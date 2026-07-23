@@ -64,6 +64,7 @@ export const api = {
     return get(`/api/combinations/${id}${qs ? '?' + qs : ''}`);
   },
   cwv: (url) => get(`/api/cwv?url=${encodeURIComponent(url)}`),
+  comboPerf: (id) => get(`/api/combo-perf?id=${encodeURIComponent(id)}`),
   authors: (id) => get(`/api/authors?id=${encodeURIComponent(id)}`),
   authorsIndex: () => get('/api/authors-index'),
   author: (name, start, end, country, cstart, cend) => {
