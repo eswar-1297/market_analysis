@@ -27,6 +27,48 @@ export const config = {
     customerId: (process.env.GOOGLE_ADS_CUSTOMER_ID || '').trim(),
     loginCustomerId: (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').trim(),
   },
+  // HubSpot — powers the per-combination "Leads" metric. A private-app access
+  // token (Contacts read scope) is all the server needs. The filter values below
+  // mirror the "mandatory contacts" business rule: a contact counts as a lead
+  // only if it matches ALL four filters (lead source, team, MQL type, create date).
+  hubspot: {
+    token: (process.env.HUBSPOT_ACCESS_TOKEN || '').trim(),
+    // Filter #1 — Lead Source IN
+    leadSources: [
+      'Manage',
+      'Manage and Migrate',
+      'Web_Pricing',
+      'Chat',
+      'Email',
+      'Web Contact Form',
+      'Webapp_Pricing',
+      'Multi channel',
+      'Migrate',
+      'Personal Web_Pricing',
+      'Contact',
+      'Free Consultation',
+    ],
+    // Filter #2 — HubSpot Team IN. Names are resolved to numeric team IDs at
+    // runtime via the Teams API. To skip resolution, set HUBSPOT_TEAM_IDS to a
+    // comma-separated list of numeric IDs (those win over the names).
+    teamNames: ['Account Management Team', 'Large MSP/Enterprise', 'SMB Team'],
+    teamIds: (process.env.HUBSPOT_TEAM_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    // Filter #3 — MQL Type =
+    mqlType: 'Business MQL',
+    // Contact properties that hold the migration source / destination clouds.
+    // Each lead is bucketed into a combination by (sourceProp -> destProp).
+    // NB: the SOURCE cloud lives in `source_destination` (its HubSpot label is
+    // "Source_Cloud"); there is no property literally named `source_cloud`.
+    sourceProp: 'source_destination',
+    destProp: 'destination_cloud',
+    // Timezone used to interpret the create-date range and to bucket each
+    // contact into a calendar day. Eastern Time (handles EDT/EST automatically),
+    // NOT the server's local time. Override with HUBSPOT_TIMEZONE if needed.
+    timezone: (process.env.HUBSPOT_TIMEZONE || 'America/New_York').trim(),
+  },
 };
 
 // GA4 + Search Console can authenticate EITHER with a service-account key
@@ -50,6 +92,7 @@ export const sources = {
       config.ads.clientSecret &&
       config.ads.customerId
   ),
+  hubspot: Boolean(config.hubspot.token),
 };
 
 export function modeFor(source) {

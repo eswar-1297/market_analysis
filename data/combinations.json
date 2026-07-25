@@ -351,6 +351,8 @@
     {
       "id": "teanant-to-tenant-migration",
       "name": "Teanant to Tenant Migration",
+      "sourceCloud": ["Tenant"],
+      "destCloud": ["Tenant"],
       "owners": {
         "content": "",
         "seo": "",

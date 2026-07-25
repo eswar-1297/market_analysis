@@ -2,15 +2,21 @@
 
 An internal dashboard to monitor and **assess marketing performance per lead-gen
 combination** (Slack to Teams, Box to Google Workspace, etc.). For each
-combination you can see real **traffic, conversions, organic clicks &
+combination you can see real **traffic, leads, organic clicks &
 impressions, search position, PPC, and Core Web Vitals** — as trend graphs —
 plus a team-assessment layer (owners, period-over-period deltas, and health
 flags for content / SEO / dev).
 
+**Leads** come from HubSpot: contacts matching the four mandatory filters (Lead
+Source, HubSpot Team, MQL Type = Business MQL, and — when a date range is
+selected — Create date) are pulled, then bucketed into each combination by their
+`source_cloud` → `destination_cloud` properties. See
+`server/connectors/hubspot.js`.
+
 - **Frontend:** React + Vite + Recharts
 - **Backend:** Node.js + Express
 - **Data sources:** Google Analytics 4, Google Search Console, Google Ads (PPC),
-  PageSpeed Insights / CrUX (Core Web Vitals)
+  PageSpeed Insights / CrUX (Core Web Vitals), HubSpot (leads)
 
 > **It runs today with realistic sample data.** Each source independently
 > switches to **real data** the moment you add its credentials to `.env`. You
@@ -35,7 +41,14 @@ The app runs as **one Node process** that serves both the built UI and the API.
    SEARCH_CONSOLE_SITE_URL=https://www.cloudfuze.com/
    PAGESPEED_API_KEY=<key>
    GOOGLE_CREDENTIALS_B64=<full base64 of the service-account JSON>
+   HUBSPOT_ACCESS_TOKEN=<private-app token, Contacts read scope>
+   # Optional: skip runtime team-name resolution by giving numeric IDs directly
+   # HUBSPOT_TEAM_IDS=123,456,789
    ```
+
+   - `HUBSPOT_ACCESS_TOKEN` powers the **Leads** metric. Create a HubSpot
+     private app with the `crm.objects.contacts.read` scope (and, for team-name
+     resolution, `settings.users.teams.read`). Without it, leads use sample data.
 
    - `GOOGLE_CREDENTIALS_B64` accepts **base64 OR raw JSON**. You can also use
      `GOOGLE_CREDENTIALS_JSON` and paste the raw key-file contents.

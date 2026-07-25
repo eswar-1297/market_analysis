@@ -5,10 +5,13 @@ const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' :
 
 function Delta({ d }) {
   if (!d) return null;
-  const arrow = d.dir === 'up' ? '▲' : d.dir === 'down' ? '▼' : '—';
+  // Flat cells show just "0%" — no leading arrow (an em-dash before "0%" reads
+  // like a minus sign, i.e. "-0%").
+  const arrow = d.dir === 'up' ? '▲' : d.dir === 'down' ? '▼' : '';
   return (
     <div className={`cell-delta ${d.dir}`}>
-      {arrow} {d.pct > 0 ? '+' : ''}
+      {arrow ? arrow + ' ' : ''}
+      {d.pct > 0 ? '+' : ''}
       {d.pct}%
     </div>
   );
@@ -56,7 +59,6 @@ export default function PageTable({ pages, compare = true }) {
               <th>Organic clicks</th>
               <th>Views</th>
               <th>Bounce rate</th>
-              <th>Conversions</th>
               <th>Perf.</th>
             </tr>
           </thead>
@@ -82,7 +84,6 @@ export default function PageTable({ pages, compare = true }) {
                     display={p.bounceRate != null ? Math.round(p.bounceRate * 100) + '%' : '—'}
                     compare={compare}
                   />
-                  <Metric value={p.conversions} delta={dl.conversions} compare={compare} />
                   <td>{score === undefined ? <span className="spinner" /> : score != null ? score : '—'}</td>
                 </tr>
               );
@@ -95,14 +96,13 @@ export default function PageTable({ pages, compare = true }) {
                   a.impressions += p.impressions || 0;
                   a.clicks += p.clicks || 0;
                   a.views += p.views || 0;
-                  a.conversions += p.conversions || 0;
                   a.posW += (p.position || 0) * (p.impressions || 0);
                   a.posI += p.impressions || 0;
                   a.bounceW += (p.bounceRate || 0) * (p.views || 0);
                   a.bounceV += p.views || 0;
                   return a;
                 },
-                { impressions: 0, clicks: 0, views: 0, conversions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 }
+                { impressions: 0, clicks: 0, views: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 }
               );
               const scores = pages.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
               const anyPerfLoaded = pages.some((p) => perf[p.url] !== undefined);
@@ -114,7 +114,6 @@ export default function PageTable({ pages, compare = true }) {
                   <td>{fmt(t.clicks)}</td>
                   <td>{fmt(t.views)}</td>
                   <td>{t.bounceV ? Math.round((t.bounceW / t.bounceV) * 100) + '%' : '—'}</td>
-                  <td>{fmt(t.conversions)}</td>
                   <td>
                     {!anyPerfLoaded ? <span className="spinner" /> : scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : '—'}
                   </td>

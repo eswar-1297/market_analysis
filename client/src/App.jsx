@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { api, auth } from './api.js';
 import PageTable from './components/PageTable.jsx';
@@ -22,6 +22,24 @@ function previousPeriod(start, end) {
   return { start: iso(ps), end: iso(pe) };
 }
 
+// Combination-level leads delta shown next to the title (aggregate delta shape:
+// { deltaPct, direction, reliable }). Flat cells show just the %, no em-dash.
+function LeadsDelta({ d }) {
+  if (!d) return null;
+  if (d.reliable === false) {
+    return <span className="delta flat" title="too little data to compare">—</span>;
+  }
+  const arrow = d.direction === 'up' ? '▲' : d.direction === 'down' ? '▼' : '';
+  const sign = d.deltaPct > 0 ? '+' : '';
+  return (
+    <span className={`delta ${d.direction}`}>
+      {arrow ? arrow + ' ' : ''}
+      {sign}
+      {d.deltaPct}%
+    </span>
+  );
+}
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -36,6 +54,10 @@ export default function App() {
   const [authorData, setAuthorData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Tracks the last Compare value the fetch effects acted on. Turning Compare
+  // OFF should NOT refetch (the data — with deltas — is already loaded, we just
+  // hide the percentages); turning it ON, or changing the period, should.
+  const prevCompare = useRef(false);
 
   const path = location.pathname;
   const comboId = path.startsWith('/c/') ? decodeURIComponent(path.slice(3)) : null;
@@ -44,7 +66,7 @@ export default function App() {
   const overviewMode = !comboId && !author; // "/" = all-combinations overview
   const selectedId = comboId;
   const country = searchParams.get('region') || 'US';
-  const compare = searchParams.get('cmp') !== '0'; // comparison on by default
+  const compare = searchParams.get('cmp') === '1'; // comparison OFF by default
   const start = searchParams.get('start') || meta?.defaultRange.start || '';
   const end = searchParams.get('end') || meta?.defaultRange.end || '';
   const maxDate = meta?.defaultRange.end || '';
@@ -99,6 +121,9 @@ export default function App() {
   // All-combinations overview (default view).
   useEffect(() => {
     if (!authed || !overviewMode || !start || !end) return;
+    const skip = prevCompare.current && !compare; // Compare turned off → just hide
+    prevCompare.current = compare;
+    if (skip) return;
     setLoading(true);
     setError(null);
     api
@@ -111,6 +136,9 @@ export default function App() {
   // One author's pages across all combinations.
   useEffect(() => {
     if (!authed || !authorMode || !start || !end) return;
+    const skip = prevCompare.current && !compare; // Compare turned off → just hide
+    prevCompare.current = compare;
+    if (skip) return;
     setLoading(true);
     setError(null);
     api
@@ -124,6 +152,9 @@ export default function App() {
 
   useEffect(() => {
     if (!authed || !selectedId || !range) return;
+    const skip = prevCompare.current && !compare; // Compare turned off → just hide
+    prevCompare.current = compare;
+    if (skip) return;
     setLoading(true);
     setError(null);
     api
@@ -272,6 +303,13 @@ export default function App() {
       <main className="main">
         <div className="title-row">
           <h1 className="h1">{title}</h1>
+          {comboId && detailReady && detail.totals && (
+            <span className="title-leads" title="HubSpot leads for this combination (US Eastern Time)">
+              <span className="num">{detail.totals.leads}</span>
+              <span className="lbl">leads</span>
+              {compare && <LeadsDelta d={detail.deltas?.leads} />}
+            </span>
+          )}
         </div>
 
         {error && <div className="warn-banner">Error: {error}</div>}

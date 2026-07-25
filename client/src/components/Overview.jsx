@@ -5,10 +5,13 @@ const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' :
 
 function Delta({ d }) {
   if (!d) return null;
-  const arrow = d.dir === 'up' ? '▲' : d.dir === 'down' ? '▼' : '—';
+  // Flat cells show just "0%" — no leading arrow (an em-dash before "0%" reads
+  // like a minus sign, i.e. "-0%").
+  const arrow = d.dir === 'up' ? '▲' : d.dir === 'down' ? '▼' : '';
   return (
     <div className={`cell-delta ${d.dir}`}>
-      {arrow} {d.pct > 0 ? '+' : ''}
+      {arrow ? arrow + ' ' : ''}
+      {d.pct > 0 ? '+' : ''}
       {d.pct}%
     </div>
   );
@@ -54,7 +57,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
               <th>Organic clicks</th>
               <th>Views</th>
               <th>Bounce rate</th>
-              <th>Conversions</th>
+              <th>Leads</th>
               <th>Perf.</th>
             </tr>
           </thead>
@@ -77,7 +80,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
                     display={r.bounceRate ? Math.round(r.bounceRate * 100) + '%' : '—'}
                     compare={compare}
                   />
-                  <Cell value={r.conversions} delta={dl.conversions} compare={compare} />
+                  <Cell value={r.leads} delta={dl.leads} compare={compare} />
                   <td>{perf[r.id] === undefined ? <span className="spinner" /> : perf[r.id] != null ? perf[r.id] : '—'}</td>
                 </tr>
               );

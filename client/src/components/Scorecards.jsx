@@ -10,11 +10,14 @@ function Delta({ d }) {
       </div>
     );
   }
-  const arrow = d.direction === 'up' ? '▲' : d.direction === 'down' ? '▼' : '—';
+  // Flat cells show just the percentage — no leading em-dash (it reads like a
+  // minus sign before "0%").
+  const arrow = d.direction === 'up' ? '▲' : d.direction === 'down' ? '▼' : '';
   const sign = d.deltaPct > 0 ? '+' : '';
   return (
     <div className={`delta ${d.direction}`}>
-      {arrow} {sign}
+      {arrow ? arrow + ' ' : ''}
+      {sign}
       {d.deltaPct}% <span style={{ color: 'var(--muted)', fontWeight: 400 }}>vs prev</span>
     </div>
   );
@@ -25,7 +28,7 @@ export default function Scorecards({ data }) {
   const cards = [
     { label: 'Page views', value: fmt(totals.pageViews ?? 0), d: null, sub: 'all visits to these pages' },
     { label: 'Sessions', value: fmt(totals.sessions), d: deltas.sessions, sub: 'entries via these pages' },
-    { label: 'Conversions', value: fmt(totals.conversions), d: deltas.conversions },
+    { label: 'Leads', value: fmt(totals.leads), d: deltas.leads, sub: 'HubSpot MQLs for this combination' },
     { label: 'Organic clicks', value: fmt(totals.clicks), d: deltas.clicks },
     { label: 'Impressions', value: fmt(totals.impressions), d: null },
     { label: 'Avg. position', value: totals.avgPosition || '—', d: deltas.position },

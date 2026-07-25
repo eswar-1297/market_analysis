@@ -10,6 +10,7 @@ import { pagespeedPage } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { pageAuthor } from './connectors/authors.js';
 import { getOverview, withDeltas } from './services/overview.js';
+import { getLeadsByCombo } from './connectors/hubspot.js';
 import { previousPeriod, toISO } from './services/dates.js';
 import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
@@ -154,11 +155,17 @@ app.get('/api/combinations/:id', async (req, res) => {
       req.query.cstart && req.query.cend
         ? { start: req.query.cstart, end: req.query.cend }
         : previousPeriod(start, end);
-    const [currentPages, previousPages] = await Promise.all([
+    const [currentPages, previousPages, curLeads, prevLeads] = await Promise.all([
       fetchCombinationPages(combo.pages, start, end, country, true),
       fetchCombinationPages(combo.pages, prev.start, prev.end, country, true),
+      getLeadsByCombo([combo], start, end),
+      getLeadsByCombo([combo], prev.start, prev.end),
     ]);
-    const result = aggregateCombination(combo, currentPages, previousPages);
+    const leads = {
+      current: curLeads.byId[combo.id]?.series || [],
+      previous: prevLeads.byId[combo.id]?.series || [],
+    };
+    const result = aggregateCombination(combo, currentPages, previousPages, leads);
     res.json({ ...result, range: { start, end }, previousRange: prev, country, dataMode: overallMode() });
   } catch (err) {
     console.error(err);

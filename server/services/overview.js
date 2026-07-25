@@ -1,8 +1,8 @@
 // Aggregated overview across ALL combinations. Uses a few batch queries (not
 // per-page) so the default landing view loads fast:
 //   - GA4 (pagePath): views + bounce rate
-//   - GA4 (landingPage): conversions (key events)
 //   - Search Console (page): clicks, impressions, position
+//   - HubSpot: leads (mandatory contacts bucketed by source->destination combo)
 // Then rolls each page up to its combination.
 
 import { google } from 'googleapis';
@@ -10,6 +10,7 @@ import { config, modeFor } from '../config.js';
 import { getGoogleAuth } from '../connectors/googleAuth.js';
 import { ga4Country, scCountry, countryWeight } from '../regions.js';
 import { mockPage } from '../connectors/mock.js';
+import { getLeadsByCombo } from '../connectors/hubspot.js';
 
 const analyticsdata = google.analyticsdata('v1beta');
 
@@ -20,15 +21,8 @@ function pathOf(url) {
     return url;
   }
 }
-function landingVariants(url) {
-  const p = pathOf(url);
-  const noSlash = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
-  const withSlash = noSlash === '/' ? '/' : noSlash + '/';
-  return [...new Set([noSlash, withSlash])];
-}
-
 function blankAgg() {
-  return { views: 0, clicks: 0, impressions: 0, conversions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 };
+  return { views: 0, clicks: 0, impressions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 };
 }
 function finalize(combos, agg) {
   return combos.map((c) => {
@@ -42,7 +36,7 @@ function finalize(combos, agg) {
       clicks: Math.round(a.clicks),
       views: Math.round(a.views),
       bounceRate: a.bounceV ? Number((a.bounceW / a.bounceV).toFixed(3)) : 0,
-      conversions: Math.round(a.conversions),
+      leads: 0, // filled in by getOverview from HubSpot
     };
   });
 }
@@ -54,19 +48,13 @@ export async function overviewLive(combos, start, end, country = 'US') {
   // url/path -> combination id maps
   const urlToCombo = {};
   const pathToCombo = {};
-  const landingToCombo = {};
   const allPaths = new Set();
-  const allLanding = new Set();
   for (const c of combos) {
     for (const pg of c.pages) {
       urlToCombo[pg.url] = c.id;
       const pth = pathOf(pg.url);
       pathToCombo[pth] = c.id;
       allPaths.add(pth);
-      for (const v of landingVariants(pg.url)) {
-        landingToCombo[v] = c.id;
-        allLanding.add(v);
-      }
     }
   }
 
@@ -84,17 +72,6 @@ export async function overviewLive(combos, start, end, country = 'US') {
       limit: 1000,
     },
   });
-  const ga4B = analyticsdata.properties.runReport({
-    auth,
-    property,
-    requestBody: {
-      dateRanges: [{ startDate: start, endDate: end }],
-      dimensions: [{ name: 'landingPage' }],
-      metrics: [{ name: 'keyEvents' }],
-      dimensionFilter: withGeo({ filter: { fieldName: 'landingPage', inListFilter: { values: [...allLanding] } } }),
-      limit: 1000,
-    },
-  });
 
   // Search Console (one query, filter to our pages in code).
   const webmasters = google.searchconsole({ version: 'v1', auth });
@@ -106,7 +83,7 @@ export async function overviewLive(combos, start, end, country = 'US') {
     requestBody: { startDate: start, endDate: end, dimensions: ['page'], dimensionFilterGroups: [{ filters: scFilters }], rowLimit: 25000 },
   });
 
-  const [aRes, bRes, scRes] = await Promise.all([ga4A, ga4B, scReq]);
+  const [aRes, scRes] = await Promise.all([ga4A, scReq]);
 
   const agg = {};
   const bump = (id) => (agg[id] = agg[id] || blankAgg());
@@ -120,11 +97,6 @@ export async function overviewLive(combos, start, end, country = 'US') {
     a.views += views;
     a.bounceW += bounce * views;
     a.bounceV += views;
-  }
-  for (const row of bRes.data.rows || []) {
-    const id = landingToCombo[row.dimensionValues[0].value];
-    if (!id) continue;
-    bump(id).conversions += Number(row.metricValues[0].value || 0);
   }
   for (const row of scRes.data.rows || []) {
     const id = urlToCombo[row.keys[0]];
@@ -150,13 +122,11 @@ export function overviewMock(combos, start, end, country = 'US') {
       const eng = m.ga4.reduce((s, d) => s + d.engagementRate, 0) / (m.ga4.length || 1);
       const clicks = m.searchConsole.reduce((s, d) => s + d.clicks, 0);
       const impr = m.searchConsole.reduce((s, d) => s + d.impressions, 0);
-      const conv = m.ga4.reduce((s, d) => s + d.conversions, 0);
       const posAvg = m.searchConsole.reduce((s, d) => s + d.position, 0) / (m.searchConsole.length || 1);
       const views = Math.round(sessions * 1.4);
       a.views += views;
       a.clicks += clicks;
       a.impressions += impr;
-      a.conversions += conv;
       a.posW += posAvg * impr;
       a.posI += impr;
       a.bounceW += (1 - eng) * views;
@@ -189,19 +159,35 @@ export function withDeltas(curRows, prevRows) {
         clicks: pctChange(r.clicks, p.clicks || 0),
         views: pctChange(r.views, p.views || 0),
         bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true),
-        conversions: pctChange(r.conversions, p.conversions || 0),
+        leads: pctChange(r.leads, p.leads || 0),
       },
     };
   });
 }
 
 export async function getOverview(combos, start, end, country) {
+  // GA4/Search Console rows (views, bounce, clicks, impressions, position).
+  let rows;
+  let source;
+  let gaError;
   if (modeFor('ga4') === 'live') {
     try {
-      return { rows: await overviewLive(combos, start, end, country), source: 'live' };
+      rows = await overviewLive(combos, start, end, country);
+      source = 'live';
     } catch (e) {
-      return { rows: overviewMock(combos, start, end, country), source: 'sample-fallback', error: e.message };
+      rows = overviewMock(combos, start, end, country);
+      source = 'sample-fallback';
+      gaError = e.message;
     }
+  } else {
+    rows = overviewMock(combos, start, end, country);
+    source = 'sample';
   }
-  return { rows: overviewMock(combos, start, end, country), source: 'sample' };
+
+  // Leads come from HubSpot and fail independently of GA4 — a HubSpot outage
+  // must not blank out the Google metrics (and vice-versa).
+  const leads = await getLeadsByCombo(combos, start, end);
+  for (const r of rows) r.leads = Math.round(leads.byId[r.id]?.total || 0);
+
+  return { rows, source, error: gaError, leadsSource: leads.source, leadsError: leads.error };
 }

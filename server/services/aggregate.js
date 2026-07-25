@@ -116,10 +116,11 @@ function pctChange(cur, prev, lowerIsBetter = false) {
 }
 
 function pageSummary(p, prev) {
+  // Leads are a combination-level metric (HubSpot contacts bucketed by
+  // source->destination), so they are NOT shown per page here.
   const cur = {
     views: p.views ?? 0,
     bounceRate: p.bounceRate ?? 0,
-    conversions: pageMetric(p, 'ga4', 'conversions'),
     clicks: pageMetric(p, 'searchConsole', 'clicks'),
     impressions: pageMetric(p, 'searchConsole', 'impressions'),
     position: pageWeightedPosition(p),
@@ -128,7 +129,6 @@ function pageSummary(p, prev) {
     ? {
         views: prev.views ?? 0,
         bounceRate: prev.bounceRate ?? 0,
-        conversions: pageMetric(prev, 'ga4', 'conversions'),
         clicks: pageMetric(prev, 'searchConsole', 'clicks'),
         impressions: pageMetric(prev, 'searchConsole', 'impressions'),
         position: pageWeightedPosition(prev),
@@ -142,7 +142,6 @@ function pageSummary(p, prev) {
     deltas: {
       views: pctChange(cur.views, pv.views || 0),
       bounceRate: pctChange(cur.bounceRate, pv.bounceRate || 0, true), // lower bounce is better
-      conversions: pctChange(cur.conversions, pv.conversions || 0),
       clicks: pctChange(cur.clicks, pv.clicks || 0),
       impressions: pctChange(cur.impressions, pv.impressions || 0),
       position: pctChange(cur.position, pv.position || 0, true),
@@ -158,7 +157,7 @@ function assessment(deltas, cwv) {
   const signals = [
     { key: 'organicClicks', label: 'Organic clicks', ...deltas.clicks },
     { key: 'traffic', label: 'Traffic (sessions)', ...deltas.sessions },
-    { key: 'conversions', label: 'Conversions', ...deltas.conversions },
+    { key: 'leads', label: 'Leads', ...deltas.leads },
     { key: 'position', label: 'Avg. search position', ...deltas.position },
   ];
   const reliable = signals.filter((s) => s.reliable);
@@ -200,28 +199,29 @@ function assessment(deltas, cwv) {
   if (down(deltas.sessions)) flags.push('Traffic (sessions) is declining — check acquisition, SEO, and paid mix.');
   if (down(deltas.clicks)) flags.push('Organic clicks are declining — SEO/content review.');
   if (down(deltas.position)) flags.push('Search rankings slipping — check on-page SEO & competitors.');
-  if (down(deltas.conversions)) flags.push('Conversions down — review CTAs, forms, and offer.');
+  if (down(deltas.leads)) flags.push('Leads down — review CTAs, forms, and offer.');
   if (cwv?.overall === 'poor') flags.push('Core Web Vitals are poor — developer/performance work needed.');
-  if (up(deltas.traffic) && down(deltas.conversions))
-    flags.push('Traffic up but conversions down — landing-page quality or intent mismatch.');
+  if (up(deltas.traffic) && down(deltas.leads))
+    flags.push('Traffic up but leads down — landing-page quality or intent mismatch.');
   if (!flags.length) flags.push('No red flags in this period. Keep it up.');
 
   return { verdict, tone, score: Number(net.toFixed(1)), signals, flags };
 }
 
-export function aggregateCombination(combo, currentPages, previousPages) {
+export function aggregateCombination(combo, currentPages, previousPages, leads = { current: [], previous: [] }) {
   const traffic = sumBy(currentPages, 'ga4', 'sessions');
-  const conversions = sumBy(currentPages, 'ga4', 'conversions');
   const clicks = sumBy(currentPages, 'searchConsole', 'clicks');
   const impressions = sumBy(currentPages, 'searchConsole', 'impressions');
   const position = weightedPosition(currentPages);
   const ppcClicks = sumBy(currentPages, 'ads', 'clicks');
   const ppcCost = sumBy(currentPages, 'ads', 'cost');
   const ppcConversions = sumBy(currentPages, 'ads', 'conversions');
+  // Leads: daily series (HubSpot contacts by createdate) passed in by the caller.
+  const leadsCur = leads?.current || [];
+  const leadsPrev = leads?.previous || [];
 
   const prev = {
     traffic: sumBy(previousPages, 'ga4', 'sessions'),
-    conversions: sumBy(previousPages, 'ga4', 'conversions'),
     clicks: sumBy(previousPages, 'searchConsole', 'clicks'),
     position: weightedPosition(previousPages),
     ppcClicks: sumBy(previousPages, 'ads', 'clicks'),
@@ -231,7 +231,7 @@ export function aggregateCombination(combo, currentPages, previousPages) {
   const clicksVol = total(clicks) + total(prev.clicks);
   const deltas = {
     sessions: delta(traffic, prev.traffic, { minVolume: 30 }),
-    conversions: delta(conversions, prev.conversions, { minVolume: 8 }),
+    leads: delta(leadsCur, leadsPrev, { minVolume: 5 }),
     clicks: delta(clicks, prev.clicks, { minVolume: 20 }),
     // Ranking change is only meaningful when the pages actually get clicks.
     position: delta(position, prev.position, { lowerIsBetter: true, volume: clicksVol, minVolume: 20 }),
@@ -249,7 +249,7 @@ export function aggregateCombination(combo, currentPages, previousPages) {
     pageCount: currentPages.length,
     trends: {
       traffic,
-      conversions,
+      leads: leadsCur,
       clicks,
       impressions,
       position,
@@ -260,7 +260,7 @@ export function aggregateCombination(combo, currentPages, previousPages) {
     totals: {
       pageViews: currentPages.reduce((a, p) => a + (p.views || 0), 0),
       sessions: Math.round(total(traffic)),
-      conversions: Math.round(total(conversions)),
+      leads: Math.round(total(leadsCur)),
       clicks: Math.round(total(clicks)),
       impressions: Math.round(total(impressions)),
       avgPosition: position.length ? Number((total(position) / position.length).toFixed(1)) : 0,
