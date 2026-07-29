@@ -160,6 +160,7 @@ export function withDeltas(curRows, prevRows) {
         views: pctChange(r.views, p.views || 0),
         bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true),
         leads: pctChange(r.leads, p.leads || 0),
+        ppcLeads: pctChange(r.ppcLeads, p.ppcLeads || 0),
       },
     };
   });

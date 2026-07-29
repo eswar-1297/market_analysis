@@ -4,8 +4,9 @@ import crypto from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { config, sources, overallMode, modeFor } from './config.js';
+import { config, sources, overallMode, modeFor, hasMsAuth } from './config.js';
 import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
+import { adsLeads } from './connectors/googleAds.js';
 import { pagespeedPage } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { pageAuthor } from './connectors/authors.js';
@@ -38,6 +39,27 @@ function saveOwners(id, owners) {
   fs.writeFileSync(OWNERS_FILE, JSON.stringify(all, null, 2));
 }
 
+// Attach PPC leads (Google Ads conversions over each combo's ad pages) to a set
+// of overview rows. There are only a handful of ad pages, and each unique page
+// is fetched once (cached) even if it appears in multiple combos.
+async function attachPpcLeads(rows, combos, ppcUrls, start, end, country) {
+  const byId = {};
+  for (const c of combos) byId[c.id] = c;
+  const cache = new Map(); // url -> conversions (dedupe across combos)
+  const leadsFor = (url) => {
+    if (!cache.has(url)) cache.set(url, adsLeads(url, start, end, country));
+    return cache.get(url);
+  };
+  await Promise.all(
+    rows.map(async (row) => {
+      const combo = byId[row.id];
+      const pages = (combo?.pages || []).filter((p) => ppcUrls.has(p.url));
+      const totals = await Promise.all(pages.map((p) => leadsFor(p.url)));
+      row.ppcLeads = Math.round(totals.reduce((s, n) => s + n, 0));
+    })
+  );
+}
+
 // Default window: last 28 days ending 2 days ago (GA4/Search Console lag a day+).
 function defaultRange() {
   const end = new Date();
@@ -48,24 +70,100 @@ function defaultRange() {
 }
 
 const app = express();
+// Behind a reverse proxy in production (HTTPS terminated upstream), so req.protocol
+// reflects X-Forwarded-Proto — needed to build a correct OAuth redirect URI.
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 
-// --- Login: verify credentials, hand back a token the client stores ---
-// The token is a deterministic HMAC of the credentials, so it stays valid
-// across server restarts/redeploys (no in-memory session store to wipe).
+// --- Auth: Microsoft (Entra ID) sign-in ---
+// The app session token is a deterministic HMAC (stays valid across restarts,
+// no session store). It's issued only after a successful Microsoft sign-in.
 function sessionToken() {
   return crypto
     .createHmac('sha256', config.authPass + '|' + config.authUser)
     .update('cf-session-v1')
     .digest('hex');
 }
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (username === config.authUser && password === config.authPass) {
-    return res.json({ token: sessionToken() });
+
+const msAuthority = () => `https://login.microsoftonline.com/${config.ms.tenantId}`;
+// Redirect URI derived from the incoming request, so it's correct both locally
+// (http://localhost:4000/...) and in production (https://your-domain/...). Both
+// must be registered in the Azure app registration.
+const redirectUri = (req) => `${req.protocol}://${req.get('host')}/api/auth/callback`;
+
+// CSRF state: signed with the client secret, valid for 10 minutes (stateless).
+function signState() {
+  const raw = `${Date.now()}.${crypto.randomBytes(9).toString('hex')}`;
+  const sig = crypto.createHmac('sha256', config.ms.clientSecret).update(raw).digest('hex');
+  return Buffer.from(`${raw}.${sig}`).toString('base64url');
+}
+function verifyState(state) {
+  try {
+    const decoded = Buffer.from(String(state), 'base64url').toString('utf8');
+    const i = decoded.lastIndexOf('.');
+    const raw = decoded.slice(0, i);
+    const sig = decoded.slice(i + 1);
+    const expect = crypto.createHmac('sha256', config.ms.clientSecret).update(raw).digest('hex');
+    if (sig !== expect) return false;
+    return Date.now() - Number(raw.split('.')[0]) < 10 * 60 * 1000;
+  } catch {
+    return false;
   }
-  return res.status(401).json({ error: 'Invalid username or password' });
+}
+
+// Whether Microsoft login is configured (so the UI can react if it isn't).
+app.get('/api/auth/config', (req, res) => res.json({ msEnabled: hasMsAuth }));
+
+// Step 1 — send the user to Microsoft to sign in.
+app.get('/api/auth/login', (req, res) => {
+  if (!hasMsAuth) return res.status(500).send('Microsoft login is not configured on the server.');
+  const params = new URLSearchParams({
+    client_id: config.ms.clientId,
+    response_type: 'code',
+    redirect_uri: redirectUri(req),
+    response_mode: 'query',
+    scope: 'openid profile email',
+    state: signState(),
+  });
+  res.redirect(`${msAuthority()}/oauth2/v2.0/authorize?${params}`);
+});
+
+// Step 2 — Microsoft redirects back here with a code; exchange it, then hand the
+// app session token to the SPA via the URL fragment.
+app.get('/api/auth/callback', async (req, res) => {
+  const fail = (msg) => res.redirect(`/?auth_error=${encodeURIComponent(msg)}`);
+  const { code, state, error, error_description } = req.query;
+  if (error) return fail(error_description || error);
+  if (!code || !verifyState(state)) return fail('Sign-in expired or invalid — please try again.');
+  try {
+    const body = new URLSearchParams({
+      client_id: config.ms.clientId,
+      client_secret: config.ms.clientSecret,
+      code: String(code),
+      redirect_uri: redirectUri(req),
+      grant_type: 'authorization_code',
+      scope: 'openid profile email',
+    });
+    const tokenRes = await fetch(`${msAuthority()}/oauth2/v2.0/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const tokens = await tokenRes.json();
+    if (!tokenRes.ok || !tokens.id_token) throw new Error(tokens.error_description || 'Microsoft token exchange failed.');
+    // The id_token came directly from Microsoft over TLS in this server-to-server
+    // exchange (authenticated with our client secret), so it's trusted as-is.
+    const payload = JSON.parse(Buffer.from(tokens.id_token.split('.')[1], 'base64url').toString('utf8'));
+    if (config.ms.allowedDomains.length) {
+      const email = String(payload.preferred_username || payload.email || '').toLowerCase();
+      const ok = config.ms.allowedDomains.some((d) => email.endsWith('@' + d) || email.endsWith('.' + d));
+      if (!ok) return fail('Your Microsoft account is not permitted to access this dashboard.');
+    }
+    res.redirect(`/#token=${sessionToken()}`);
+  } catch (e) {
+    fail(e.message || 'Sign-in failed.');
+  }
 });
 
 // Everything else under /api requires a valid token (login above is exempt).
@@ -98,8 +196,8 @@ app.get('/api/meta', (req, res) => {
     site: data.site,
     dataMode: overallMode(),
     sources,
-    combinationCount: data.combinations.length,
-    pageCount: data.combinations.reduce((a, c) => a + c.pages.length, 0),
+    combinationCount: data.combinations.filter((c) => !c.excludeFromOverview).length,
+    pageCount: data.combinations.filter((c) => !c.excludeFromOverview).reduce((a, c) => a + c.pages.length, 0),
     defaultRange: defaultRange(),
     regions: REGIONS,
     defaultCountry: DEFAULT_COUNTRY,
@@ -114,6 +212,7 @@ app.get('/api/combinations', (req, res) => {
       name: c.name,
       pageCount: c.pages.length,
       owners: c.owners,
+      excludeFromOverview: Boolean(c.excludeFromOverview),
     }))
   );
 });
@@ -122,14 +221,25 @@ app.get('/api/combinations', (req, res) => {
 app.get('/api/overview', async (req, res) => {
   try {
     const data = loadCombinations();
+    // Groups flagged excludeFromOverview (e.g. the PPC landing-page set) are
+    // selectable in the dropdown but are NOT rows here — their pages already
+    // live under real combinations, so counting them again would double up.
+    const combos = data.combinations.filter((c) => !c.excludeFromOverview);
     const range = defaultRange();
     const start = req.query.start || range.start;
     const end = req.query.end || range.end;
     const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
-    const result = await getOverview(data.combinations, start, end, country);
+    const result = await getOverview(combos, start, end, country);
+    // PPC leads per combo = Google Ads conversions over that combo's ad (PPC)
+    // pages. Attached here so the overview shows organic AND paid leads.
+    const ppcUrls = new Set(
+      data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
+    );
+    await attachPpcLeads(result.rows, combos, ppcUrls, start, end, country);
     // Optional comparison period (cstart/cend, GA-style) → per-combination deltas.
     if (req.query.cstart && req.query.cend) {
-      const prev = await getOverview(data.combinations, req.query.cstart, req.query.cend, country);
+      const prev = await getOverview(combos, req.query.cstart, req.query.cend, country);
+      await attachPpcLeads(prev.rows, combos, ppcUrls, req.query.cstart, req.query.cend, country);
       result.rows = withDeltas(result.rows, prev.rows);
     }
     res.json({ ...result, range: { start, end }, country, dataMode: overallMode() });
@@ -149,24 +259,57 @@ app.get('/api/combinations/:id', async (req, res) => {
     const start = req.query.start || range.start;
     const end = req.query.end || range.end;
     const country = isValidCountry(req.query.country) ? req.query.country : DEFAULT_COUNTRY;
-    // Current + comparison period. The client can supply a custom compare range
-    // (cstart/cend, GA-style); otherwise we use the auto previous period.
-    const prev =
-      req.query.cstart && req.query.cend
-        ? { start: req.query.cstart, end: req.query.cend }
-        : previousPeriod(start, end);
-    const [currentPages, previousPages, curLeads, prevLeads] = await Promise.all([
+    // Only fetch the comparison period when the client asks for it (compare on,
+    // via cstart/cend). With compare off — the default — skipping it roughly
+    // halves the work (no second round of per-page GA4/Search Console calls).
+    const wantCompare = Boolean(req.query.cstart && req.query.cend);
+    const prev = wantCompare ? { start: req.query.cstart, end: req.query.cend } : previousPeriod(start, end);
+    const [currentPages, curLeads, previousPages, prevLeads] = await Promise.all([
       fetchCombinationPages(combo.pages, start, end, country, true),
-      fetchCombinationPages(combo.pages, prev.start, prev.end, country, true),
       getLeadsByCombo([combo], start, end, country),
-      getLeadsByCombo([combo], prev.start, prev.end, country),
+      wantCompare ? fetchCombinationPages(combo.pages, prev.start, prev.end, country, true) : Promise.resolve([]),
+      wantCompare ? getLeadsByCombo([combo], prev.start, prev.end, country) : Promise.resolve({ byId: {} }),
     ]);
     const leads = {
       current: curLeads.byId[combo.id]?.series || [],
       previous: prevLeads.byId[combo.id]?.series || [],
     };
     const result = aggregateCombination(combo, currentPages, previousPages, leads);
-    res.json({ ...result, range: { start, end }, previousRange: prev, country, dataMode: overallMode() });
+    // Flag which pages are paid (PPC) landing pages vs organic, so the table can
+    // distinguish them. Source of truth: pages listed in any excludeFromOverview
+    // (PPC) group.
+    const ppcUrls = new Set(
+      data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
+    );
+    result.pages = result.pages.map((p) => ({ ...p, ppc: ppcUrls.has(p.url) }));
+
+    // Combination-level PPC leads = Google Ads conversions summed over the PPC
+    // (ad) pages only. Shown as a badge beside the title, alongside organic leads.
+    const sumAdsConv = (arr) =>
+      arr
+        .filter((pg) => ppcUrls.has(pg.url))
+        .reduce((tot, pg) => tot + (pg.ads || []).reduce((s, d) => s + (d.conversions || 0), 0), 0);
+    result.totals.ppcLeads = Math.round(sumAdsConv(currentPages));
+    result.hasPpcPages = currentPages.some((pg) => ppcUrls.has(pg.url));
+    if (wantCompare) {
+      // Growth/decline vs the comparison period for organic, PPC, and combined
+      // leads — shown next to each leads chip in the page table.
+      const mk = (cur, prev) => {
+        if (!cur && !prev) return null;
+        const pct = prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100) || 0;
+        return { pct, dir: pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat' };
+      };
+      const orgCur = result.totals.leads;
+      const orgPrev = Math.round(result.deltas.leads?.previous ?? 0);
+      const ppcCur = result.totals.ppcLeads;
+      const ppcPrev = Math.round(sumAdsConv(previousPages));
+      result.leadsDeltas = {
+        organic: mk(orgCur, orgPrev),
+        ppc: mk(ppcCur, ppcPrev),
+        total: mk(orgCur + ppcCur, orgPrev + ppcPrev),
+      };
+    }
+    res.json({ ...result, range: { start, end }, previousRange: wantCompare ? prev : null, country, dataMode: overallMode() });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

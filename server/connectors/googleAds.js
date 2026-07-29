@@ -3,8 +3,9 @@
 // Ad -> landing-page attribution uses the expanded_landing_page_view resource.
 
 import { GoogleAdsApi } from 'google-ads-api';
-import { config } from '../config.js';
+import { config, modeFor } from '../config.js';
 import { dateRange } from '../services/dates.js';
+import { mockPage } from './mock.js';
 
 let customer;
 function getCustomer() {
@@ -28,6 +29,14 @@ function getCustomer() {
 // geographic_view join and is left account-wide for now.
 export async function adsPage(url, start, end, country = 'US') {
   const cust = getCustomer();
+  // Google stores each landing page's final URL WITH its full query string
+  // appended (utm_*, gclid/gbraid, etc.), so an exact match never hits. Match
+  // by prefix instead: the clean page URL optionally followed by "?<query>".
+  const escaped = String(url).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = `^${escaped}([?].*)?$`;
+  // GAQL treats backslash as its own escape char inside string literals, so a
+  // literal backslash for the RE2 engine must be doubled.
+  const gaqlRegex = regex.replace(/\\/g, '\\\\');
   const rows = await cust.query(`
     SELECT
       segments.date,
@@ -36,7 +45,7 @@ export async function adsPage(url, start, end, country = 'US') {
       metrics.cost_micros,
       metrics.conversions
     FROM expanded_landing_page_view
-    WHERE expanded_landing_page_view.expanded_final_url = '${url.replace(/'/g, "")}'
+    WHERE expanded_landing_page_view.expanded_final_url REGEXP_MATCH '${gaqlRegex}'
       AND segments.date BETWEEN '${start}' AND '${end}'
   `);
 
@@ -56,4 +65,20 @@ export async function adsPage(url, start, end, country = 'US') {
     d.conversions = Number(d.conversions.toFixed(1));
     return d;
   });
+}
+
+// Total Google Ads conversions (paid leads) for a single landing page. Live
+// when Ads is configured, otherwise deterministic sample data; a live error
+// falls back to 0 so it never blocks the overview.
+export async function adsLeads(url, start, end, country = 'US') {
+  if (modeFor('ads') !== 'live') {
+    const m = mockPage(url, start, end, country);
+    return m.ads.reduce((s, d) => s + (d.conversions || 0), 0);
+  }
+  try {
+    const rows = await adsPage(url, start, end, country);
+    return rows.reduce((s, d) => s + (d.conversions || 0), 0);
+  } catch {
+    return 0;
+  }
 }

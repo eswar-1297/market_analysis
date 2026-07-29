@@ -12,6 +12,7 @@
     "build": "npm --prefix client run build",
     "check": "node server/check.js",
     "auth": "node server/auth.js",
+    "ads-auth": "node server/adsAuth.js",
     "start": "node server/index.js"
   },
   "dependencies": {
@@ -19,7 +20,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "google-ads-api": "^17.1.0",
+    "google-ads-api": "^24.1.0",
     "googleapis": "^140.0.1"
   },
   "devDependencies": {

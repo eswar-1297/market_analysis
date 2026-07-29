@@ -13,6 +13,10 @@
         {
           "url": "https://www.cloudfuze.com/slack-to-teams-migration-guide-for-it-admins/",
           "label": "slack-to-teams-migration-guide-for-it-admins"
+        },
+        {
+          "url": "https://www.cloudfuze.com/slack-to-teams-migration-ads/",
+          "label": "slack-to-teams-migration-ads"
         }
       ]
     },
@@ -74,6 +78,10 @@
         {
           "url": "https://www.cloudfuze.com/dropbox-to-g-suite-migration/",
           "label": "dropbox-to-g-suite-migration"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-to-google-workspace-ads/",
+          "label": "dropbox-to-google-workspace-ads"
         }
       ]
     },
@@ -154,6 +162,10 @@
         {
           "url": "https://www.cloudfuze.com/successful-steps-for-box-to-microsoft-365-migration/",
           "label": "successful-steps-for-box-to-microsoft-365-migration"
+        },
+        {
+          "url": "https://www.cloudfuze.com/box-microsoft365-google-ads/",
+          "label": "box-microsoft365-google-ads"
         }
       ]
     },
@@ -177,6 +189,10 @@
         {
           "url": "https://www.cloudfuze.com/dropbox-to-sharepoint-online/",
           "label": "dropbox-to-sharepoint-online"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-microsoft365-google-ads/",
+          "label": "dropbox-microsoft365-google-ads"
         }
       ]
     },
@@ -350,7 +366,7 @@
     },
     {
       "id": "teanant-to-tenant-migration",
-      "name": "Teanant to Tenant Migration",
+      "name": "Tenant to Tenant Migration",
       "sourceCloud": ["Tenant"],
       "destCloud": ["Tenant"],
       "owners": {
@@ -374,6 +390,14 @@
         {
           "url": "https://www.cloudfuze.com/teams-to-teams-migration/",
           "label": "teams-to-teams-migration"
+        },
+        {
+          "url": "https://www.cloudfuze.com/microsoft-365-migration-ads/",
+          "label": "microsoft-365-migration-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/google-workspace-ads/",
+          "label": "google-workspace-ads"
         }
       ]
     },
@@ -389,6 +413,42 @@
         {
           "url": "https://www.cloudfuze.com/saas-management-software/",
           "label": "saas-management-software"
+        }
+      ]
+    },
+    {
+      "id": "ppc",
+      "name": "PPC",
+      "excludeFromOverview": true,
+      "owners": {
+        "content": "",
+        "seo": "",
+        "developer": ""
+      },
+      "pages": [
+        {
+          "url": "https://www.cloudfuze.com/slack-to-teams-migration-ads/",
+          "label": "slack-to-teams-migration-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-microsoft365-google-ads/",
+          "label": "dropbox-microsoft365-google-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/box-microsoft365-google-ads/",
+          "label": "box-microsoft365-google-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-to-google-workspace-ads/",
+          "label": "dropbox-to-google-workspace-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/microsoft-365-migration-ads/",
+          "label": "microsoft-365-migration-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/google-workspace-ads/",
+          "label": "google-workspace-ads"
         }
       ]
     }

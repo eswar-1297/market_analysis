@@ -80,6 +80,7 @@ body {
 }
 .login-field input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
 .login-btn { width: 100%; padding: 12px; font-size: 14px; margin-top: 4px; }
+.ms-btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; text-decoration: none; box-sizing: border-box; }
 .login-error { background: var(--bad-bg); color: var(--bad); font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: 9px; }
 
 /* ---------- Top app bar ---------- */
@@ -203,6 +204,7 @@ body {
 .title-leads { display: inline-flex; align-items: baseline; gap: 6px; }
 .title-leads .num { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .title-leads .lbl { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
+.title-leads.ppc .num { color: #c25e12; }
 .title-leads .delta { font-size: 11px; padding: 2px 7px; }
 .authors { display: flex; align-items: center; gap: 8px; }
 .authors-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
@@ -403,6 +405,40 @@ td a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 .page-author::before { content: '· '; color: var(--muted); }
+.chan-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  vertical-align: middle;
+}
+.chan-badge.ppc { background: #fdecdd; color: #c25e12; }
+
+/* Organic / PPC grouping in the page table */
+.cmp-label { font-weight: 800; }
+.cmp-count { color: var(--muted); font-weight: 500; font-size: 11.5px; margin-left: 8px; }
+/* Group the Organic / PPC rows with a soft colored left accent stripe */
+.grp-org td:first-child { border-left: 3px solid var(--brand-light); }
+.grp-ppc td:first-child { border-left: 3px solid #f0a868; }
+.grp-gap td { height: 14px; border: none; background: transparent; padding: 0; }
+.grp-gap:hover td { background: transparent; }
+.group-total td { font-weight: 700; }
+.group-total.grp-org td { background: var(--brand-wash); }
+.group-total.grp-ppc td { background: #fdf6ee; }
+.group-total.ppc td { background: #fefaf5; }
+.leads-chip {
+  display: inline-block; margin-left: 10px; padding: 1px 9px; border-radius: 11px;
+  font-size: 11px; font-weight: 800; background: var(--brand-tint); color: var(--brand);
+}
+.group-total.ppc .leads-chip { background: #fdecdd; color: #c25e12; }
+.chip-delta { margin-left: 6px; font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.chip-delta.up { color: var(--good); }
+.chip-delta.down { color: var(--bad); }
+.chip-delta.flat { color: var(--muted); }
 
 .clickable-row { cursor: pointer; }
 .combo-link { color: var(--brand); font-weight: 600; }

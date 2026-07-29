@@ -9,9 +9,23 @@ export const config = {
   googleCredentialsB64: (process.env.GOOGLE_CREDENTIALS_B64 || process.env.GOOGLE_CREDENTIALS_JSON || '').trim(),
   scSiteUrl: (process.env.SEARCH_CONSOLE_SITE_URL || '').trim(),
   pagespeedApiKey: (process.env.PAGESPEED_API_KEY || '').trim(),
-  // Dashboard login (HTTP Basic Auth). Override in .env if desired.
+  // Server secret used to sign the app session token + OAuth state. Not a
+  // user-facing login anymore (that's Microsoft) — just an internal HMAC key.
   authUser: process.env.DASHBOARD_USER || 'CFMARKETING',
   authPass: process.env.DASHBOARD_PASS || 'CloudFuze@2026',
+  // Microsoft (Entra ID) sign-in. Users authenticate with their Microsoft
+  // account; only your tenant's users can get in (single-tenant app).
+  ms: {
+    tenantId: (process.env.MS_TENANT_ID || '').trim(),
+    clientId: (process.env.MS_CLIENT_ID || '').trim(),
+    clientSecret: (process.env.MS_CLIENT_SECRET || '').trim(),
+    // Optional extra guard: comma-separated allowed email domains
+    // (e.g. "cloudfuze.com"). Empty = allow anyone in the tenant.
+    allowedDomains: (process.env.MS_ALLOWED_DOMAINS || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  },
   // OAuth "sign in with your own Google account" — used when you have view
   // access but can't grant a service account (see `npm run auth`).
   oauth: {
@@ -73,6 +87,7 @@ export const config = {
 
 // GA4 + Search Console can authenticate EITHER with a service-account key
 // (GOOGLE_APPLICATION_CREDENTIALS) OR with your own Google login via OAuth.
+export const hasMsAuth = Boolean(config.ms.tenantId && config.ms.clientId && config.ms.clientSecret);
 export const hasServiceAccount = Boolean(config.googleAppCreds || config.googleCredentialsB64);
 export const hasOAuth = Boolean(
   config.oauth.clientId && config.oauth.clientSecret && config.oauth.refreshToken

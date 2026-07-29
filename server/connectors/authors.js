@@ -1,12 +1,16 @@
 // Extracts the article author from each page's HTML (<meta name="author">).
-// Cached in-process for 24h since authorship rarely changes.
+// The author is a nice-to-have shown beside each page, so it must NEVER hold up
+// a response: we use a short timeout, no retry, and cache BOTH hits and misses
+// (misses briefly) so a slow/blocked page can't stall every combination visit.
 
 const cache = new Map(); // url -> { at, name }
-const TTL = 24 * 60 * 60 * 1000;
+const HIT_TTL = 24 * 60 * 60 * 1000; // successes: authorship rarely changes
+const MISS_TTL = 10 * 60 * 1000; // failures: retry occasionally, but not every visit
+const FETCH_TIMEOUT_MS = 4000;
 
 async function fetchAuthorOnce(url) {
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers: { 'user-agent': 'Mozilla/5.0 (CloudFuze Marketing Dashboard)' },
   });
   if (!res.ok) return null;
@@ -20,15 +24,14 @@ async function fetchAuthorOnce(url) {
 
 export async function pageAuthor(url) {
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < TTL) return hit.name; // only successes are cached
+  if (hit && Date.now() - hit.at < (hit.name ? HIT_TTL : MISS_TTL)) return hit.name;
   let name = null;
   try {
-    name = await fetchAuthorOnce(url);
-    if (!name) name = await fetchAuthorOnce(url); // one retry for transient hiccups
+    name = await fetchAuthorOnce(url); // single attempt, short timeout — no retry
   } catch {
     name = null;
   }
-  // Cache ONLY successful lookups, so a transient failure doesn't stick for 24h.
-  if (name) cache.set(url, { at: Date.now(), name });
+  // Cache misses too (short TTL) so a slow/blocked page isn't re-scraped every visit.
+  cache.set(url, { at: Date.now(), name });
   return name;
 }

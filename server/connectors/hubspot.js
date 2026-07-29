@@ -103,6 +103,23 @@ export async function pullMandatoryContacts({ from, to } = {}) {
   return out;
 }
 
+// --- Cached raw pull --------------------------------------------------------
+// The mandatory-contacts pull is date-range-scoped and NOT combo- or region-
+// specific (bucketing/region-filtering happen in memory below). It's also the
+// slowest call (HubSpot search is ~1-2s and paginates), and the SAME pull is
+// needed by the overview AND every combination for a given range. So cache the
+// raw contacts by date range: the range loads once, then every combo reuses it.
+const contactsCache = new Map(); // "from|to" -> { at, contacts }
+const CONTACTS_TTL_MS = 5 * 60 * 1000;
+async function getMandatoryContacts(from, to) {
+  const key = `${from || ''}|${to || ''}`;
+  const hit = contactsCache.get(key);
+  if (hit && Date.now() - hit.at < CONTACTS_TTL_MS) return hit.contacts;
+  const contacts = await pullMandatoryContacts({ from, to });
+  contactsCache.set(key, { at: Date.now(), contacts });
+  return contacts;
+}
+
 // --- Bucket contacts into combinations by source_cloud -> destination_cloud -
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -241,7 +258,7 @@ function zeroSeries(start, end) {
 // Live: pull contacts, bucket by combo, build per-combo total + daily series.
 // `country` (ISO alpha-2, or 'ALL'/null) filters leads to that region.
 async function leadsByComboLive(combos, start, end, country) {
-  const contacts = await pullMandatoryContacts({ from: start, to: end });
+  const contacts = await getMandatoryContacts(start, end);
   const match = buildMatcher(combos);
   const { sourceProp, destProp } = config.hubspot;
   const region = country && country !== 'ALL' ? country : null;

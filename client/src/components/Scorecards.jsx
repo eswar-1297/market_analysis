@@ -28,7 +28,7 @@ export default function Scorecards({ data }) {
   const cards = [
     { label: 'Page views', value: fmt(totals.pageViews ?? 0), d: null, sub: 'all visits to these pages' },
     { label: 'Sessions', value: fmt(totals.sessions), d: deltas.sessions, sub: 'entries via these pages' },
-    { label: 'Leads', value: fmt(totals.leads), d: deltas.leads, sub: 'HubSpot MQLs for this combination' },
+    { label: 'Organic Leads', value: fmt(totals.leads), d: deltas.leads, sub: 'HubSpot MQLs for this combination' },
     { label: 'Organic clicks', value: fmt(totals.clicks), d: deltas.clicks },
     { label: 'Impressions', value: fmt(totals.impressions), d: null },
     { label: 'Avg. position', value: totals.avgPosition || '—', d: deltas.position },

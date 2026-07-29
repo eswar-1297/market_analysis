@@ -57,7 +57,8 @@ export default function Overview({ rows, onOpen, compare = false }) {
               <th>Organic clicks</th>
               <th>Views</th>
               <th>Bounce rate</th>
-              <th>Leads</th>
+              <th>Organic Leads</th>
+              <th>PPC Leads</th>
               <th>Perf.</th>
             </tr>
           </thead>
@@ -81,6 +82,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
                     compare={compare}
                   />
                   <Cell value={r.leads} delta={dl.leads} compare={compare} />
+                  <Cell value={r.ppcLeads} delta={dl.ppcLeads} compare={compare} />
                   <td>{perf[r.id] === undefined ? <span className="spinner" /> : perf[r.id] != null ? perf[r.id] : '—'}</td>
                 </tr>
               );

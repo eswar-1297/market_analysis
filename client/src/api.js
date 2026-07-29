@@ -7,6 +7,18 @@ export const auth = {
   isAuthed: () => Boolean(localStorage.getItem(TOKEN_KEY)),
 };
 
+// After Microsoft sign-in, the server redirects back to "/#token=<app-token>".
+// Capture it, store it, and strip it from the URL. Runs once on module load,
+// before React reads auth state.
+(function captureRedirectToken() {
+  if (typeof window === 'undefined') return;
+  const m = window.location.hash.match(/[#&]token=([^&]+)/);
+  if (m) {
+    auth.set(decodeURIComponent(m[1]));
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+})();
+
 function headers(extra = {}) {
   const t = auth.token();
   return { ...extra, ...(t ? { Authorization: `Bearer ${t}` } : {}) };
@@ -29,17 +41,6 @@ async function get(url) {
 }
 
 export const api = {
-  login: async (username, password) => {
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!res.ok) throw new Error('Invalid username or password');
-    const d = await res.json();
-    auth.set(d.token);
-    return d;
-  },
   logout: () => auth.clear(),
   meta: () => get('/api/meta'),
   combinations: () => get('/api/combinations'),

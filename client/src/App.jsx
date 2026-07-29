@@ -22,22 +22,36 @@ function previousPeriod(start, end) {
   return { start: iso(ps), end: iso(pe) };
 }
 
-// Combination-level leads delta shown next to the title (aggregate delta shape:
-// { deltaPct, direction, reliable }). Flat cells show just the %, no em-dash.
+// Leads delta shown next to the title. Accepts either shape: the overview's
+// { pct, dir } or the combination detail's { deltaPct, direction, reliable }.
+// Flat cells show just the %, no em-dash (it reads like a minus before "0%").
 function LeadsDelta({ d }) {
   if (!d) return null;
   if (d.reliable === false) {
     return <span className="delta flat" title="too little data to compare">—</span>;
   }
-  const arrow = d.direction === 'up' ? '▲' : d.direction === 'down' ? '▼' : '';
-  const sign = d.deltaPct > 0 ? '+' : '';
+  const dir = d.dir || d.direction;
+  const pct = d.pct ?? d.deltaPct;
+  const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '';
+  const sign = pct > 0 ? '+' : '';
   return (
-    <span className={`delta ${d.direction}`}>
+    <span className={`delta ${dir}`}>
       {arrow ? arrow + ' ' : ''}
       {sign}
-      {d.deltaPct}%
+      {pct}%
     </span>
   );
+}
+
+// Live-source errors can be huge HTML bodies (e.g. Google's 502 error page).
+// Reduce each to a short, readable summary: prefer the HTML <title>, else strip
+// tags and truncate.
+function cleanError(msg) {
+  const s = String(msg || '');
+  const title = s.match(/<title>([^<]+)<\/title>/i);
+  let text = title ? title[1] : s.replace(/<[^>]+>/g, ' ');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length > 140 ? text.slice(0, 140) + '…' : text;
 }
 
 export default function App() {
@@ -54,10 +68,10 @@ export default function App() {
   const [authorData, setAuthorData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  // Tracks the last Compare value the fetch effects acted on. Turning Compare
-  // OFF should NOT refetch (the data — with deltas — is already loaded, we just
-  // hide the percentages); turning it ON, or changing the period, should.
-  const prevCompare = useRef(false);
+  // Client-side result cache, keyed by request signature. Makes re-selecting a
+  // combination (or toggling Compare) instant — no refetch — and is warmed in
+  // the background so any combination is ready by the time it's clicked.
+  const dataCache = useRef(new Map());
 
   const path = location.pathname;
   const comboId = path.startsWith('/c/') ? decodeURIComponent(path.slice(3)) : null;
@@ -121,14 +135,21 @@ export default function App() {
   // All-combinations overview (default view).
   useEffect(() => {
     if (!authed || !overviewMode || !start || !end) return;
-    const skip = prevCompare.current && !compare; // Compare turned off → just hide
-    prevCompare.current = compare;
-    if (skip) return;
+    const key = `ov|${start}|${end}|${country}|${compare ? cstart : ''}|${compare ? cend : ''}`;
+    const cached = dataCache.current.get(key);
+    if (cached) {
+      setError(null);
+      setOverview(cached);
+      return; // instant — no reload
+    }
     setLoading(true);
     setError(null);
     api
       .overview(start, end, country, compare ? cstart : null, compare ? cend : null)
-      .then(setOverview)
+      .then((d) => {
+        dataCache.current.set(key, d);
+        setOverview(d);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [authed, overviewMode, start, end, country, compare, cstart, cend]);
@@ -136,14 +157,21 @@ export default function App() {
   // One author's pages across all combinations.
   useEffect(() => {
     if (!authed || !authorMode || !start || !end) return;
-    const skip = prevCompare.current && !compare; // Compare turned off → just hide
-    prevCompare.current = compare;
-    if (skip) return;
+    const key = `au|${author}|${start}|${end}|${country}|${compare ? cstart : ''}|${compare ? cend : ''}`;
+    const cached = dataCache.current.get(key);
+    if (cached) {
+      setError(null);
+      setAuthorData(cached);
+      return; // instant — no reload
+    }
     setLoading(true);
     setError(null);
     api
       .author(author, start, end, country, compare ? cstart : null, compare ? cend : null)
-      .then(setAuthorData)
+      .then((d) => {
+        dataCache.current.set(key, d);
+        setAuthorData(d);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [authed, authorMode, author, start, end, country, compare, cstart, cend]);
@@ -152,19 +180,35 @@ export default function App() {
 
   useEffect(() => {
     if (!authed || !selectedId || !range) return;
-    const skip = prevCompare.current && !compare; // Compare turned off → just hide
-    prevCompare.current = compare;
-    if (skip) return;
+    const key = `c|${selectedId}|${start}|${end}|${country}|${compare ? cstart : ''}|${compare ? cend : ''}`;
+    const cached = dataCache.current.get(key);
+    if (cached) {
+      setError(null);
+      setDetail(cached);
+      return; // instant — no reload (previously opened this combo)
+    }
     setLoading(true);
     setError(null);
     api
       .combination(selectedId, start, end, country, compare ? cstart : null, compare ? cend : null)
-      .then(setDetail)
+      .then((d) => {
+        dataCache.current.set(key, d);
+        setDetail(d);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [selectedId, start, end, country, authed, compare, cstart, cend]);
 
   const selectedCombo = combos.find((c) => c.id === selectedId);
+  // Real source→destination combinations vs. dropdown-only groups (e.g. PPC).
+  const realCombos = combos.filter((c) => !c.excludeFromOverview);
+  const ppcCombos = combos.filter((c) => c.excludeFromOverview);
+  // Leads for the selected combination come straight from the already-loaded
+  // overview (it returns leads + delta per combo), so the badge is instant — no
+  // wait for the detail fetch. Falls back to the detail response if the overview
+  // for these exact params isn't cached (e.g. deep-linked straight to a combo).
+  const ovKey = `ov|${start}|${end}|${country}|${compare ? cstart : ''}|${compare ? cend : ''}`;
+  const ovRow = comboId ? dataCache.current.get(ovKey)?.rows?.find((r) => r.id === selectedId) : null;
   const detailReady = detail && detail.id === selectedId;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
   const title = comboId ? (selectedCombo ? selectedCombo.name : 'Loading…') : authorMode ? `Author: ${author}` : 'All combinations';
@@ -206,9 +250,18 @@ export default function App() {
             onChange={(e) => go(e.target.value)}
             title="Select a view"
           >
-            <option value="__all__">All combinations ({combos.length})</option>
+            <option value="__all__">All combinations ({realCombos.length})</option>
+            {ppcCombos.length > 0 && (
+              <optgroup label="Paid (PPC)">
+                {ppcCombos.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.pageCount})
+                  </option>
+                ))}
+              </optgroup>
+            )}
             <optgroup label="Combinations">
-              {combos.map((c) => (
+              {realCombos.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name} ({c.pageCount})
                 </option>
@@ -303,22 +356,16 @@ export default function App() {
       <main className="main">
         <div className="title-row">
           <h1 className="h1">{title}</h1>
-          {comboId && detailReady && detail.totals && (
-            <span className="title-leads" title="HubSpot leads for this combination (US Eastern Time)">
-              <span className="num">{detail.totals.leads}</span>
-              <span className="lbl">leads</span>
-              {compare && <LeadsDelta d={detail.deltas?.leads} />}
-            </span>
-          )}
         </div>
 
         {error && <div className="warn-banner">Error: {error}</div>}
         {hasErrors && (
           <div className="warn-banner">
-            Some live sources failed and fell back to sample data:{' '}
+            Some live sources temporarily failed and fell back to sample data:{' '}
             {Object.entries(detail.errors)
-              .map(([k, v]) => `${k} (${v})`)
+              .map(([k, v]) => `${k} — ${cleanError(v)}`)
               .join('; ')}
+            . Try refreshing.
           </div>
         )}
 
@@ -334,7 +381,14 @@ export default function App() {
           )
         )}
 
-        {!loading && comboId && detailReady && <PageTable pages={detail.pages} compare={compare} />}
+        {!loading && comboId && detailReady && (
+          <PageTable
+            pages={detail.pages}
+            compare={compare}
+            leads={{ organic: ovRow ? ovRow.leads : detail.totals?.leads, ppc: detail.totals?.ppcLeads }}
+            leadsDeltas={compare ? detail.leadsDeltas : null}
+          />
+        )}
       </main>
     </div>
   );

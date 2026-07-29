@@ -10,12 +10,22 @@ import { searchConsolePage } from '../connectors/searchConsole.js';
 import { adsPage } from '../connectors/googleAds.js';
 import { pageAuthor } from '../connectors/authors.js';
 
+// Reduce an error to a short summary — API failures (e.g. Google 502) can carry
+// an entire HTML error page as the message; we don't want that in the payload.
+function summarizeError(err) {
+  const s = String(err?.message || err || '');
+  const title = s.match(/<title>([^<]+)<\/title>/i);
+  let t = title ? title[1] : s.replace(/<[^>]+>/g, ' ');
+  t = t.replace(/\s+/g, ' ').trim();
+  return t.length > 200 ? t.slice(0, 200) + '…' : t;
+}
+
 async function withFallback(source, liveFn, fallback, errors) {
   if (modeFor(source) !== 'live') return { data: fallback, mode: 'sample' };
   try {
     return { data: await liveFn(), mode: 'live' };
   } catch (err) {
-    errors[source] = err.message || String(err);
+    errors[source] = summarizeError(err);
     return { data: fallback, mode: 'sample-fallback' };
   }
 }

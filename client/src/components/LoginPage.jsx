@@ -1,61 +1,33 @@
-import { useState } from 'react';
-import { api } from '../api.js';
+// Sign-in is delegated to Microsoft (Entra ID). This page just shows a button
+// that sends the browser to the server's OAuth start route; on success the
+// server redirects back with an app token that api.js captures.
 
-export default function LoginPage({ onSuccess }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
+const MsLogo = () => (
+  <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden="true" style={{ flexShrink: 0 }}>
+    <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+    <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+    <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+    <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+  </svg>
+);
 
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await api.login(username.trim(), password);
-      onSuccess();
-    } catch {
-      setError('Invalid username or password');
-      setBusy(false);
-    }
-  };
-
+export default function LoginPage() {
+  const error = new URLSearchParams(window.location.search).get('auth_error');
   return (
     <div className="login-shell">
-      <form className="login-card" onSubmit={submit}>
+      <div className="login-card">
         <div className="login-brand">
           Cloud<span>Fuze</span> Marketing
         </div>
         <div className="login-sub">Sign in to the marketing dashboard</div>
 
-        <label className="login-field">
-          <span>Username</span>
-          <input
-            autoFocus
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Username"
-            autoComplete="username"
-          />
-        </label>
-
-        <label className="login-field">
-          <span>Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            autoComplete="current-password"
-          />
-        </label>
-
         {error && <div className="login-error">{error}</div>}
 
-        <button className="btn login-btn" type="submit" disabled={busy || !username || !password}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
+        <a className="btn login-btn ms-btn" href="/api/auth/login">
+          <MsLogo />
+          Sign in with Microsoft
+        </a>
+      </div>
     </div>
   );
 }
