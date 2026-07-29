@@ -186,7 +186,7 @@ export async function getOverview(combos, start, end, country) {
 
   // Leads come from HubSpot and fail independently of GA4 — a HubSpot outage
   // must not blank out the Google metrics (and vice-versa).
-  const leads = await getLeadsByCombo(combos, start, end);
+  const leads = await getLeadsByCombo(combos, start, end, country);
   for (const r of rows) r.leads = Math.round(leads.byId[r.id]?.total || 0);
 
   return { rows, source, error: gaError, leadsSource: leads.source, leadsError: leads.error };

@@ -158,8 +158,8 @@ app.get('/api/combinations/:id', async (req, res) => {
     const [currentPages, previousPages, curLeads, prevLeads] = await Promise.all([
       fetchCombinationPages(combo.pages, start, end, country, true),
       fetchCombinationPages(combo.pages, prev.start, prev.end, country, true),
-      getLeadsByCombo([combo], start, end),
-      getLeadsByCombo([combo], prev.start, prev.end),
+      getLeadsByCombo([combo], start, end, country),
+      getLeadsByCombo([combo], prev.start, prev.end, country),
     ]);
     const leads = {
       current: curLeads.byId[combo.id]?.series || [],

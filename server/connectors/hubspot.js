@@ -13,6 +13,7 @@
 
 import { config, modeFor } from '../config.js';
 import { dateRange } from '../services/dates.js';
+import { countryWeight } from '../regions.js';
 import { etMidnightMs, nextDay, toEtDate } from '../services/datetime.js';
 
 const BASE = 'https://api.hubapi.com';
@@ -69,7 +70,18 @@ export async function pullMandatoryContacts({ from, to } = {}) {
   if (from) filters.push({ propertyName: 'createdate', operator: 'GTE', value: String(etMidnightMs(from)) });
   if (to) filters.push({ propertyName: 'createdate', operator: 'LT', value: String(etMidnightMs(nextDay(to))) });
 
-  const properties = [sourceProp, destProp, 'createdate', 'lead_source', 'mql_type', 'hubspot_team_id'];
+  const properties = [
+    sourceProp,
+    destProp,
+    'createdate',
+    'lead_source',
+    'mql_type',
+    'hubspot_team_id',
+    // Country fields, in resolution-priority order (see contactCountryCode).
+    'hs_country_region_code',
+    'country',
+    'ip_country_code',
+  ];
   const out = [];
   let after;
   // HubSpot Search caps at 10k results (100/page). Bound the loop as a backstop.
@@ -93,6 +105,31 @@ export async function pullMandatoryContacts({ from, to } = {}) {
 
 // --- Bucket contacts into combinations by source_cloud -> destination_cloud -
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// --- Region filter: resolve a contact to an ISO alpha-2 country code ---------
+// Free-text country names -> alpha-2, covering the dashboard's regions and
+// common variants. Only the selected region needs to resolve; anything else
+// simply won't match a specific-region view (and all contacts show under "ALL").
+const COUNTRY_NAME_TO_CODE = {
+  unitedstates: 'US', usa: 'US', us: 'US', unitedstatesofamerica: 'US', america: 'US',
+  unitedkingdom: 'GB', uk: 'GB', greatbritain: 'GB', england: 'GB', britain: 'GB',
+  canada: 'CA',
+  australia: 'AU',
+  india: 'IN',
+  germany: 'DE', deutschland: 'DE',
+};
+function contactCountryCode(p) {
+  // 1) HubSpot's normalized alpha-2 code (most reliable when present)
+  const hs = String(p.hs_country_region_code || '').trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(hs)) return hs;
+  // 2) Free-text country field, mapped by name (highest coverage)
+  const byName = COUNTRY_NAME_TO_CODE[norm(p.country)];
+  if (byName) return byName;
+  // 3) IP-based alpha-2 code (fallback)
+  const ip = String(p.ip_country_code || '').trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(ip)) return ip;
+  return null;
+}
 
 // Common cloud-name variants collapsed to one canonical token. Extend this as
 // you discover mismatches in the unmatched-pairs log (see leadsByCombo).
@@ -202,17 +239,22 @@ function zeroSeries(start, end) {
 }
 
 // Live: pull contacts, bucket by combo, build per-combo total + daily series.
-async function leadsByComboLive(combos, start, end) {
+// `country` (ISO alpha-2, or 'ALL'/null) filters leads to that region.
+async function leadsByComboLive(combos, start, end, country) {
   const contacts = await pullMandatoryContacts({ from: start, to: end });
   const match = buildMatcher(combos);
   const { sourceProp, destProp } = config.hubspot;
+  const region = country && country !== 'ALL' ? country : null;
 
   const byId = {};
   for (const c of combos) byId[c.id] = { total: 0, series: zeroSeries(start, end), byDate: {} };
 
   const unmatched = {}; // "source -> dest" -> count, to help you extend ALIAS/overrides
+  let considered = 0;
   let matched = 0;
   for (const p of contacts) {
+    if (region && contactCountryCode(p) !== region) continue; // outside selected region
+    considered++;
     const id = match(p[sourceProp], p[destProp]);
     if (!id) {
       const key = `${p[sourceProp] || '∅'} -> ${p[destProp] || '∅'}`;
@@ -235,12 +277,12 @@ async function leadsByComboLive(combos, start, end) {
   const unmatchedList = Object.entries(unmatched).sort((a, b) => b[1] - a[1]);
   if (unmatchedList.length) {
     console.warn(
-      `[hubspot] ${contacts.length} mandatory contacts, ${matched} matched a combo. ` +
+      `[hubspot] ${considered} mandatory contacts${region ? ` in ${region}` : ''}, ${matched} matched a combo. ` +
         `Unmatched source->destination pairs (add aliases or per-combo sourceCloud/destCloud to map them):`
     );
     for (const [pair, n] of unmatchedList.slice(0, 25)) console.warn(`  ${n.toString().padStart(5)}  ${pair}`);
   }
-  return { byId, source: 'live', contactsTotal: contacts.length, matched };
+  return { byId, source: 'live', contactsTotal: considered, matched };
 }
 
 // Mock: deterministic per-combo lead counts so sample mode still works.
@@ -252,12 +294,13 @@ function hash(str) {
   }
   return h >>> 0;
 }
-function leadsByComboMock(combos, start, end) {
+function leadsByComboMock(combos, start, end, country) {
   const dates = dateRange(start, end);
+  const w = countryWeight(country); // region's share of the global total (ALL => 1)
   const byId = {};
   for (const c of combos) {
     // Base daily rate 0..~4 leads, seeded by combo id (stable across reloads).
-    const rate = (hash(c.id + 'leads') % 100) / 100 * 4;
+    const rate = (hash(c.id + 'leads') % 100) / 100 * 4 * w;
     let total = 0;
     const series = dates.map((date) => {
       const dow = new Date(date + 'T00:00:00Z').getUTCDay();
@@ -274,12 +317,13 @@ function leadsByComboMock(combos, start, end) {
 
 // Public entry: live when a token is configured, otherwise sample data. A live
 // failure falls back to sample data and records the error (same pattern as GA4).
-export async function getLeadsByCombo(combos, start, end) {
-  if (modeFor('hubspot') !== 'live') return leadsByComboMock(combos, start, end);
+// `country` (ISO alpha-2, or 'ALL'/null) filters leads to that region.
+export async function getLeadsByCombo(combos, start, end, country) {
+  if (modeFor('hubspot') !== 'live') return leadsByComboMock(combos, start, end, country);
   try {
-    return await leadsByComboLive(combos, start, end);
+    return await leadsByComboLive(combos, start, end, country);
   } catch (e) {
     console.error('[hubspot] live leads pull failed, using sample data:', e.message);
-    return { ...leadsByComboMock(combos, start, end), source: 'sample-fallback', error: e.message };
+    return { ...leadsByComboMock(combos, start, end, country), source: 'sample-fallback', error: e.message };
   }
 }
