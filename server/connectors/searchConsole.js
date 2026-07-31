@@ -15,21 +15,40 @@ async function getClient() {
   return webmasters;
 }
 
+// The Search Console API intermittently returns a transient 400
+// ("Request contains an invalid argument") or 429/5xx under load, even for a
+// valid query — so retry a few times with backoff before giving up. This stops
+// a momentary hiccup from blanking the page to sample data.
+async function withRetry(fn, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 350 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function searchConsolePage(url, start, end, country = 'US') {
   const sc = await getClient();
   const filters = [{ dimension: 'page', operator: 'equals', expression: url }];
   const cc = country && country !== 'ALL' ? scCountry(country) : null;
   if (cc) filters.push({ dimension: 'country', operator: 'equals', expression: cc });
-  const resp = await sc.searchanalytics.query({
-    siteUrl: config.scSiteUrl,
-    requestBody: {
-      startDate: start,
-      endDate: end,
-      dimensions: ['date'],
-      dimensionFilterGroups: [{ filters }],
-      rowLimit: 25000,
-    },
-  });
+  const resp = await withRetry(() =>
+    sc.searchanalytics.query({
+      siteUrl: config.scSiteUrl,
+      requestBody: {
+        startDate: start,
+        endDate: end,
+        dimensions: ['date'],
+        dimensionFilterGroups: [{ filters }],
+        rowLimit: 25000,
+      },
+    })
+  );
 
   const byDate = {};
   for (const row of resp.data.rows || []) {

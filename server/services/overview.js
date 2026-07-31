@@ -14,6 +14,22 @@ import { getLeadsByCombo } from '../connectors/hubspot.js';
 
 const analyticsdata = google.analyticsdata('v1beta');
 
+// GA4 / Search Console occasionally return a transient error (400
+// "invalid argument", 429, 5xx) even for a valid query — retry with backoff so
+// a momentary hiccup doesn't drop the whole overview to sample data.
+async function withRetry(fn, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 350 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 function pathOf(url) {
   try {
     return new URL(url).pathname;
@@ -61,27 +77,31 @@ export async function overviewLive(combos, start, end, country = 'US') {
   const geo = country && country !== 'ALL' ? [{ filter: { fieldName: 'countryId', stringFilter: { matchType: 'EXACT', value: ga4Country(country) } } }] : [];
   const withGeo = (pageFilter) => (geo.length ? { andGroup: { expressions: [pageFilter, ...geo] } } : pageFilter);
 
-  const ga4A = analyticsdata.properties.runReport({
-    auth,
-    property,
-    requestBody: {
-      dateRanges: [{ startDate: start, endDate: end }],
-      dimensions: [{ name: 'pagePath' }],
-      metrics: [{ name: 'screenPageViews' }, { name: 'bounceRate' }],
-      dimensionFilter: withGeo({ filter: { fieldName: 'pagePath', inListFilter: { values: [...allPaths] } } }),
-      limit: 1000,
-    },
-  });
+  const ga4A = withRetry(() =>
+    analyticsdata.properties.runReport({
+      auth,
+      property,
+      requestBody: {
+        dateRanges: [{ startDate: start, endDate: end }],
+        dimensions: [{ name: 'pagePath' }],
+        metrics: [{ name: 'screenPageViews' }, { name: 'bounceRate' }],
+        dimensionFilter: withGeo({ filter: { fieldName: 'pagePath', inListFilter: { values: [...allPaths] } } }),
+        limit: 1000,
+      },
+    })
+  );
 
   // Search Console (one query, filter to our pages in code).
   const webmasters = google.searchconsole({ version: 'v1', auth });
   const scFilters = [{ dimension: 'page', operator: 'includingRegex', expression: '.*' }];
   const cc = country && country !== 'ALL' ? scCountry(country) : null;
   if (cc) scFilters.push({ dimension: 'country', operator: 'equals', expression: cc });
-  const scReq = webmasters.searchanalytics.query({
-    siteUrl: config.scSiteUrl,
-    requestBody: { startDate: start, endDate: end, dimensions: ['page'], dimensionFilterGroups: [{ filters: scFilters }], rowLimit: 25000 },
-  });
+  const scReq = withRetry(() =>
+    webmasters.searchanalytics.query({
+      siteUrl: config.scSiteUrl,
+      requestBody: { startDate: start, endDate: end, dimensions: ['page'], dimensionFilterGroups: [{ filters: scFilters }], rowLimit: 25000 },
+    })
+  );
 
   const [aRes, scRes] = await Promise.all([ga4A, scReq]);
 
