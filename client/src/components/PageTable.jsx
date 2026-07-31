@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import { makeRanges, fmtRound, inRange } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
@@ -47,25 +48,19 @@ function aggregate(rows) {
 }
 
 // A cumulative summary row for a group (Organic / PPC) or the overall total.
-// Optionally shows that group's leads total as a chip in the label cell, with a
-// growth/decline % beside it when a comparison delta is provided.
-function SummaryRow({ label, cls, count, rows, perfCells, leadsValue, leadsDelta }) {
+// The group's leads total sits in the dedicated Leads column, with a
+// growth/decline % beneath it when a comparison delta is provided.
+function SummaryRow({ label, cls, rows, perfCells, leadsValue, leadsDelta }) {
   const t = aggregate(rows);
   return (
     <tr className={cls}>
-      <td>
-        {label && <span className="cmp-label">{label}</span>}
-        {count != null && <span className="cmp-count">{count} page{count !== 1 ? 's' : ''}</span>}
+      <td>{label && <span className="cmp-label">{label}</span>}</td>
+      <td className="lead-cell">
         {leadsValue != null && (
-          <span className="leads-chip">
-            {fmt(leadsValue)} leads
-            {leadsDelta && (
-              <span className={`chip-delta ${leadsDelta.dir}`}>
-                {leadsDelta.dir === 'up' ? '▲' : leadsDelta.dir === 'down' ? '▼' : ''} {leadsDelta.pct > 0 ? '+' : ''}
-                {leadsDelta.pct}%
-              </span>
-            )}
-          </span>
+          <>
+            <div className="cell-val">{fmt(leadsValue)}</div>
+            {leadsDelta && <Delta d={leadsDelta} />}
+          </>
         )}
       </td>
       <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
@@ -78,15 +73,16 @@ function SummaryRow({ label, cls, count, rows, perfCells, leadsValue, leadsDelta
   );
 }
 
-export default function PageTable({ pages, compare = true, leads, leadsDeltas }) {
+export default function PageTable({ pages: allPages, compare = true, leads, leadsDeltas }) {
   // Performance score loads lazily per page (slow PageSpeed call), so the table
   // renders instantly and the Perf. cell fills in when ready.
   const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
+  const [filters, setFilters] = useState({}); // colKey -> { lo, hi, idx } | undefined
 
   useEffect(() => {
     let cancelled = false;
     setPerf({});
-    for (const p of pages) {
+    for (const p of allPages) {
       api
         .cwv(p.url)
         .then((d) => !cancelled && setPerf((s) => ({ ...s, [p.url]: d.performanceScore })))
@@ -95,18 +91,49 @@ export default function PageTable({ pages, compare = true, leads, leadsDeltas })
     return () => {
       cancelled = true;
     };
-  }, [pages]);
+  }, [allPages]);
+
+  // Per-column range filters (same UI/logic as the overview table). Leads isn't
+  // a per-page metric, so it has no filter.
+  const filterCols = [
+    { key: 'position', get: (p) => p.position, format: (v) => String(Math.round(v)) },
+    { key: 'impressions', get: (p) => p.impressions, format: fmtRound },
+    { key: 'clicks', get: (p) => p.clicks, format: fmtRound },
+    { key: 'views', get: (p) => p.views, format: fmtRound },
+    { key: 'bounceRate', get: (p) => p.bounceRate, format: (v) => Math.round(v * 100) + '%' },
+    { key: 'perf', get: (p) => perf[p.url], format: (v) => String(Math.round(v)) },
+  ];
+  const ranges = useMemo(() => {
+    const out = {};
+    for (const c of filterCols) out[c.key] = makeRanges(allPages.map(c.get), c.format);
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPages, perf]);
+  const pages = useMemo(
+    () => allPages.filter((p) => filterCols.every((c) => inRange(c.get(p), filters[c.key]))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allPages, filters, perf]
+  );
+  const anyFilter = Object.values(filters).some(Boolean);
 
   const organicPages = pages.filter((p) => !p.ppc);
   const ppcPages = pages.filter((p) => p.ppc);
   const hasBoth = organicPages.length > 0 && ppcPages.length > 0;
 
-  // Average performance score across a set of pages (lazy — shows a spinner
-  // until at least one page's score has loaded).
+  // Render a performance score, colored red when below 97 (needs attention).
+  const renderPerf = (score) => {
+    if (score === undefined) return <span className="spinner" />;
+    if (score == null) return '—';
+    return <span className={score < 97 ? 'perf-low' : ''}>{score}</span>;
+  };
+
+  // Average performance score across a set of pages (lazy — spinner until at
+  // least one page's score has loaded).
   const groupPerf = (rows) => {
     const sc = rows.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
     const anyLoaded = rows.some((p) => perf[p.url] !== undefined);
-    return !anyLoaded ? <span className="spinner" /> : sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : '—';
+    if (!anyLoaded) return <span className="spinner" />;
+    return renderPerf(sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : null);
   };
 
   const renderRow = (p, cls = '') => {
@@ -121,6 +148,7 @@ export default function PageTable({ pages, compare = true, leads, leadsDeltas })
           {p.ppc && <span className="chan-badge ppc">PPC</span>}
           {p.author && <span className="page-author">{p.author}</span>}
         </td>
+        <td className="lead-cell" />
         <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
         <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
         <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
@@ -131,18 +159,27 @@ export default function PageTable({ pages, compare = true, leads, leadsDeltas })
           display={p.bounceRate != null ? Math.round(p.bounceRate * 100) + '%' : '—'}
           compare={compare}
         />
-        <td>{score === undefined ? <span className="spinner" /> : score != null ? score : '—'}</td>
+        <td>{renderPerf(score)}</td>
       </tr>
     );
   };
 
   return (
     <div>
+      {anyFilter && (
+        <div className="filter-summary">
+          Showing {pages.length} of {allPages.length} pages
+          <button type="button" className="filter-clear" onClick={() => setFilters({})}>
+            Clear filters
+          </button>
+        </div>
+      )}
       <div className="table-card">
         <table>
           <thead>
             <tr>
               <th>Page</th>
+              <th>Leads</th>
               <th>Avg. position</th>
               <th>Impressions</th>
               <th>Organic clicks</th>
@@ -150,20 +187,51 @@ export default function PageTable({ pages, compare = true, leads, leadsDeltas })
               <th>Bounce rate</th>
               <th>Perf.</th>
             </tr>
+            <tr className="filter-row">
+              <td />
+              <td />
+              {filterCols.map((c) => (
+                <td key={c.key}>
+                  {ranges[c.key].length > 0 && (
+                    <select
+                      className="col-filter"
+                      value={filters[c.key]?.idx ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFilters((f) => ({ ...f, [c.key]: v === '' ? undefined : { ...ranges[c.key][+v], idx: +v } }));
+                      }}
+                    >
+                      <option value="">All</option>
+                      {ranges[c.key].map((rg, i) => (
+                        <option key={i} value={i}>
+                          {rg.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+              ))}
+            </tr>
           </thead>
           <tbody>
-            {hasBoth ? (
+            {!pages.length ? (
+              <tr>
+                <td colSpan={8} style={{ color: 'var(--muted)', textAlign: 'center', padding: '18px' }}>
+                  No pages match the selected filters.
+                </td>
+              </tr>
+            ) : hasBoth ? (
               <>
                 {/* Organic group: pages + cumulative subtotal (blue accent) */}
                 {organicPages.map((p) => renderRow(p, 'grp-org'))}
-                <SummaryRow cls="group-total grp-org" label="Organic total" rows={organicPages} perfCells={groupPerf(organicPages)} leadsValue={leads?.organic ?? 0} leadsDelta={leadsDeltas?.organic} />
+                <SummaryRow cls="group-total grp-org" rows={organicPages} perfCells={groupPerf(organicPages)} leadsValue={leads?.organic ?? 0} leadsDelta={leadsDeltas?.organic} />
 
                 {/* Gap between the two groups */}
-                <tr className="grp-gap"><td colSpan={7} /></tr>
+                <tr className="grp-gap"><td colSpan={8} /></tr>
 
                 {/* PPC group: pages + cumulative subtotal (amber accent) */}
                 {ppcPages.map((p) => renderRow(p, 'grp-ppc'))}
-                <SummaryRow cls="group-total ppc grp-ppc" label="PPC total" rows={ppcPages} perfCells={groupPerf(ppcPages)} leadsValue={leads?.ppc ?? 0} leadsDelta={leadsDeltas?.ppc} />
+                <SummaryRow cls="group-total ppc grp-ppc" rows={ppcPages} perfCells={groupPerf(ppcPages)} leadsValue={leads?.ppc ?? 0} leadsDelta={leadsDeltas?.ppc} />
 
                 {/* Grand total across both groups (organic + PPC) */}
                 <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={(leads?.organic ?? 0) + (leads?.ppc ?? 0)} leadsDelta={leadsDeltas?.total} />
@@ -172,7 +240,7 @@ export default function PageTable({ pages, compare = true, leads, leadsDeltas })
               <>
                 {pages.map((p) => renderRow(p))}
                 {pages.length > 1 && (
-                  <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={leads?.organic ?? 0} leadsDelta={leadsDeltas?.organic} />
+                  <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={leads ? (leads.organic ?? 0) + (leads.ppc ?? 0) : null} leadsDelta={leadsDeltas?.total} />
                 )}
               </>
             )}
