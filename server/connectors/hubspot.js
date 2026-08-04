@@ -167,6 +167,9 @@ const ALIAS = {
   team: 'teams',
   msteams: 'teams',
   microsoftteams: 'teams',
+  // A rep pasted the customer's domain with the product in brackets. One-off, but
+  // it is unambiguously a Teams destination.
+  nposervicescommsteams: 'teams',
   // Microsoft 365 / Office 365
   o365: 'office365',
   office365: 'office365',
@@ -178,6 +181,21 @@ const ALIAS = {
   microsoft365commercial: 'office365',
   commercialm365: 'office365',
   microsoft365gcchigh: 'office365',
+  // GCC High / Commercial / Government tenants are all Microsoft 365 — these turn
+  // up as the two sides of a Microsoft tenant-to-tenant migration.
+  gcchighm365: 'office365',
+  m365gcchigh: 'office365',
+  microsoft365commercialtenant: 'office365',
+  microsoft365governmenttenant: 'office365',
+  gcctenant: 'office365',
+  commercialmicrosoft365: 'office365',
+  microsoft365gcc: 'office365',
+  m365gcc: 'office365',
+  microsoft365tenant: 'office365',
+  consolidatedmicrosoft365tenant: 'office365',
+  // "Microsoft 365 or other cloud platforms" — an open-ended answer, treated as
+  // Microsoft 365 by explicit request.
+  microsoft365orothercloudplatforms: 'office365',
   // Google Chat
   googlechat: 'googlechat',
   gchat: 'googlechat',
@@ -186,15 +204,25 @@ const ALIAS = {
   gworkspace: 'googleworkspace',
   gws: 'googleworkspace',
   googleworkspace: 'googleworkspace',
-  googleworkspce: 'googleworkspace', // combos.json typo ("Google Workspce")
+  googleworkspce: 'googleworkspace', // observed typo ("Google Workspce")
   googleworksapce: 'googleworkspace', // observed typo
+  google: 'googleworkspace', // bare "Google" — reps' shorthand for Google Workspace
   // Google Drive is treated as Google Workspace — Drive leads count under the
   // corresponding "… to Google Workspace" combination.
   gdrive: 'googleworkspace',
   googledrive: 'googleworkspace',
+  googledrivemigration: 'googleworkspace', // rep typed the product + "migration"
+  // Multi-cloud enquiry: "Google Workspace / Box / Dropbox / Slack". Counted under
+  // Google Workspace (the first cloud listed) by explicit request — it therefore
+  // does NOT also appear under the Box, Dropbox or Slack combinations.
+  googleworkspaceboxdropboxslack: 'googleworkspace',
   googlemydrive: 'googleworkspace',
   googleshareddrive: 'googleworkspace',
+  googleshareddrives: 'googleworkspace',
   googledriveshareddrive: 'googleworkspace',
+  shareddrive: 'googleworkspace',
+  shareddrives: 'googleworkspace',
+  googleworkspacestandardgoogledrive: 'googleworkspace',
   // Box
   box: 'box',
   boxbusiness: 'box',
@@ -217,36 +245,135 @@ const ALIAS = {
   // NFS
   nfs: 'nfs',
   networkfilesystemnfs: 'nfs',
-  // SharePoint / OneDrive — not combo endpoints today, but normalized so future
-  // combos (and the unmatched log) stay clean.
-  sharepointonline: 'sharepoint',
-  odfb: 'onedrive',
-  onedrivebusiness: 'onedrive',
+  // SharePoint / OneDrive are Microsoft 365 components, so a lead going to either
+  // counts under the corresponding "… to Microsoft 365" combination. The page-level
+  // FINE_ALIAS below keeps them apart again, so a SharePoint lead lands on the
+  // SharePoint page and a OneDrive lead on the OneDrive page.
+  sharepoint: 'office365',
+  sharepointonline: 'office365',
+  microsoftsharepointonline: 'office365',
+  microsoftsharepointonlinegcchigh: 'office365',
+  sharepointonlinemicrosoft365: 'office365',
+  onedrive: 'office365',
+  onedriveforbusiness: 'office365',
+  onedrivebusiness: 'office365',
+  odfb: 'office365',
 };
 const canon = (s) => ALIAS[norm(s)] || norm(s);
 
-// Build a (source, destination) -> comboId matcher. A combo's source/destination
-// come from explicit `sourceCloud`/`destCloud` fields in combinations.json if
-// present, otherwise from splitting its name on " to " (e.g. "Box to Teams").
+// --- Fine-grained canon, for attributing a combination's leads to INDIVIDUAL
+// pages. The coarse ALIAS above deliberately collapses every Google flavour to
+// "googleworkspace" so combination totals stay whole; that's useless for pages,
+// because "… to Google Drive", "… to Google Shared Drives" and "… to G Suite"
+// are separate articles. This table keeps those apart. A value absent here
+// falls through to its normalized form, so it matches no page and stays
+// unattributed (see leadsByPage) rather than being guessed into one.
+const FINE_ALIAS = {
+  // Google, kept distinct
+  googledrive: 'gdrive', gdrive: 'gdrive', googlemydrive: 'gdrive', mydrive: 'gdrive',
+  googledrivemigration: 'gdrive',
+  googleshareddrive: 'gshared', googleshareddrives: 'gshared',
+  shareddrive: 'gshared', shareddrives: 'gshared', googledriveshareddrive: 'gshared',
+  gsuite: 'gsuite',
+  googleworkspace: 'gworkspace', gws: 'gworkspace', gworkspace: 'gworkspace',
+  googleworkspce: 'gworkspace', googleworksapce: 'gworkspace',
+  // Bare "Google" names no product, so it's generic at page level too.
+  google: 'gworkspace',
+  // Multi-cloud / open-ended answers: they count towards the combination but name
+  // no single product, so at page level they stay generic and claim no page.
+  googleworkspaceboxdropboxslack: 'gworkspace',
+  microsoft365orothercloudplatforms: 'm365',
+  // Microsoft
+  onedrive: 'onedrive', onedriveforbusiness: 'onedrive', onedrivebusiness: 'onedrive', odfb: 'onedrive',
+  // SharePoint, incl. the variants that bolt the suite name on — they still mean
+  // SharePoint Online, so they belong on the SharePoint page.
+  sharepoint: 'sharepoint', sharepointonline: 'sharepoint',
+  microsoftsharepointonline: 'sharepoint',
+  sharepointonlinemicrosoft365: 'sharepoint',
+  microsoftsharepointonlinegcchigh: 'sharepoint',
+  microsoft365: 'm365', m365: 'm365', ms365: 'm365', ms356: 'm365', office365: 'm365', o365: 'm365', 365: 'm365',
+  microsoft365commercial: 'm365', commercialm365: 'm365', microsoft365gcchigh: 'm365',
+  gcchighm365: 'm365', m365gcchigh: 'm365',
+  microsoft365commercialtenant: 'm365', microsoft365governmenttenant: 'm365',
+  gcctenant: 'm365', commercialmicrosoft365: 'm365',
+  microsoft365gcc: 'm365', m365gcc: 'm365',
+  microsoft365tenant: 'm365', consolidatedmicrosoft365tenant: 'm365',
+  teams: 'teams', team: 'teams', msteams: 'teams', microsoftteams: 'teams',
+  nposervicescommsteams: 'teams',
+  outlook: 'outlook',
+  // Google comms / mail
+  googlechat: 'gchat', gchat: 'gchat',
+  gmail: 'gmail',
+  // Everything else
+  slack: 'slack', slackpro: 'slack', slackworkspace: 'slack', businessslack: 'slack',
+  box: 'box', boxbusiness: 'box',
+  dropbox: 'dropbox', dropboxbusiness: 'dropbox', dropboxpersonal: 'dropbox',
+  dropboxprofessional: 'dropbox', dropboxaccount: 'dropbox', drobox: 'dropbox',
+  egnyte: 'egnyte', egnyet: 'egnyte', egnyteserver: 'egnyte', egnytecloud: 'egnyte',
+  sharefile: 'citrix', sharefilebusiness: 'citrix', citrixsharefile: 'citrix', citrix: 'citrix',
+  nfs: 'nfs', networkfilesystemnfs: 'nfs',
+};
+const canonFine = (s) => FINE_ALIAS[norm(s)] || norm(s);
+
+// Does a raw field mention one of a combination's keywords? Used by products that
+// aren't a cloud-to-cloud pair (Hyper Link Fixer), where the rep types the need in
+// words rather than naming a source and destination platform. "linkedin" is
+// stripped first so it can never be read as a "link" mention.
+function mentionsKeyword(raw, keywords) {
+  const text = String(raw || '').toLowerCase().replace(/linkedin/g, '');
+  return keywords.some((k) => text.includes(k.toLowerCase()));
+}
+
+// A combination's coarse source/destination sets: explicit sourceCloud/destCloud
+// from combinations.json when present, else split the name on " to ".
+function comboClouds(c) {
+  let src = c.sourceCloud;
+  let dst = c.destCloud;
+  const keywords = Array.isArray(c.matchKeywords) ? c.matchKeywords : null;
+  if (!src || !dst) {
+    const m = String(c.name || '').split(/\s+to\s+/i);
+    // A keyword-only combination needs no cloud pair at all.
+    if (m.length !== 2) {
+      if (keywords) return { srcSet: new Set(), dstSet: new Set(), sameCloud: false, keywords };
+      return null; // can't derive — this combo matches nothing
+    }
+    src = src || m[0];
+    dst = dst || m[1];
+  }
+  return {
+    srcSet: new Set([].concat(src).map(canon)),
+    dstSet: new Set([].concat(dst).map(canon)),
+    // `sameCloud` combinations (Tenant to Tenant) are migrations WITHIN one
+    // platform, so the lead's source and destination must be the same cloud.
+    // Without this, listing several clouds would also match every cross-cloud
+    // pairing between them (e.g. Microsoft 365 -> Google Workspace).
+    sameCloud: Boolean(c.sameCloud),
+    keywords,
+  };
+}
+
+// Does a lead belong to this combination? Raw values are passed in as well as the
+// canonical ones, because keyword matching reads the text the rep actually typed.
+function comboMatches(sets, cs, cd, rawSrc, rawDst) {
+  // Keyword match on EITHER field wins on its own — the lead named a need, not a pair.
+  if (sets.keywords && (mentionsKeyword(rawSrc, sets.keywords) || mentionsKeyword(rawDst, sets.keywords))) {
+    return true;
+  }
+  if (sets.sameCloud && cs !== cd) return false;
+  return sets.srcSet.has(cs) && sets.dstSet.has(cd);
+}
+
+// Build a (source, destination) -> comboId matcher.
 function buildMatcher(combos) {
   const table = [];
   for (const c of combos) {
-    let src = c.sourceCloud;
-    let dst = c.destCloud;
-    if (!src || !dst) {
-      const m = String(c.name || '').split(/\s+to\s+/i);
-      if (m.length !== 2) continue; // can't derive — skip (won't match by name)
-      src = src || m[0];
-      dst = dst || m[1];
-    }
-    const srcSet = new Set([].concat(src).map(canon));
-    const dstSet = new Set([].concat(dst).map(canon));
-    table.push({ id: c.id, srcSet, dstSet });
+    const sets = comboClouds(c);
+    if (sets) table.push({ id: c.id, ...sets });
   }
   return (sourceCloud, destCloud) => {
     const cs = canon(sourceCloud);
     const cd = canon(destCloud);
-    for (const t of table) if (t.srcSet.has(cs) && t.dstSet.has(cd)) return t.id;
+    for (const t of table) if (comboMatches(t, cs, cd, sourceCloud, destCloud)) return t.id;
     return null;
   };
 }
@@ -300,6 +427,76 @@ async function leadsByComboLive(combos, start, end, country) {
     for (const [pair, n] of unmatchedList.slice(0, 25)) console.warn(`  ${n.toString().padStart(5)}  ${pair}`);
   }
   return { byId, source: 'live', contactsTotal: considered, matched };
+}
+
+// --- Per-page lead attribution ----------------------------------------------
+// Splits ONE combination's leads across its individual pages, using each page's
+// fine-grained sourceCloud/destCloud from combinations.json.
+//
+// Rules (all deliberate — see the notes in the dashboard README):
+//   * Only leads that already belong to this combination are considered, so page
+//     counts can never exceed the combination total.
+//   * A lead is attributed only when it matches EXACTLY ONE page. If two pages
+//     declare the same pair (e.g. two "Dropbox -> OneDrive" articles) the lead is
+//     ambiguous and stays unattributed rather than being guessed or split.
+//   * Leads whose destination is generic for the combination ("Google Workspace"
+//     for a combo whose pages are Drive / Shared Drives / G Suite) match no page
+//     and stay unattributed.
+//   * Pages with no declared pair (ad pages, Hyper Link Fixer, SaaS Management)
+//     get null — rendered as "—", meaning "not attributable", not "zero".
+// Returns { byUrl, attributed, unattributed, total }.
+export async function getLeadsByPage(combo, start, end, country) {
+  const pages = combo.pages || [];
+  const mappable = pages.filter((p) => p.sourceCloud && p.destCloud);
+  const byUrl = {};
+  for (const p of pages) byUrl[p.url] = p.sourceCloud && p.destCloud ? 0 : null;
+
+  if (modeFor('hubspot') !== 'live') {
+    // Sample mode: spread the mock combo total round-robin over mappable pages
+    // so the column isn't blank when there are no credentials.
+    const total = leadsByComboMock([combo], start, end, country).byId[combo.id].total;
+    mappable.forEach((p, i) => {
+      byUrl[p.url] = Math.floor(total / mappable.length) + (i < total % mappable.length ? 1 : 0);
+    });
+    return { byUrl, attributed: total, unattributed: 0, total };
+  }
+
+  const sets = comboClouds(combo);
+  if (!sets) return { byUrl, attributed: 0, unattributed: 0, total: 0 };
+
+  const contacts = await getMandatoryContacts(start, end);
+  const { sourceProp, destProp } = config.hubspot;
+  const region = country && country !== 'ALL' ? country : null;
+
+  // Fine-grained (source, dest) -> set of page urls; >1 page means ambiguous.
+  // A Set, not an array: one page may list several spellings that collapse to the
+  // same fine token (e.g. "Google Drive" and "Google My Drive"), and that must
+  // not make the page look like two competing candidates.
+  const fine = new Map();
+  for (const p of mappable) {
+    for (const s of [].concat(p.sourceCloud)) {
+      for (const d of [].concat(p.destCloud)) {
+        const k = `${canonFine(s)}|${canonFine(d)}`;
+        if (!fine.has(k)) fine.set(k, new Set());
+        fine.get(k).add(p.url);
+      }
+    }
+  }
+
+  let total = 0;
+  let attributed = 0;
+  for (const p of contacts) {
+    if (region && contactCountryCode(p) !== region) continue;
+    // Must belong to this combination first (coarse match).
+    if (!comboMatches(sets, canon(p[sourceProp]), canon(p[destProp]), p[sourceProp], p[destProp])) continue;
+    total++;
+    const urls = fine.get(`${canonFine(p[sourceProp])}|${canonFine(p[destProp])}`);
+    if (urls && urls.size === 1) {
+      byUrl[[...urls][0]]++;
+      attributed++;
+    }
+  }
+  return { byUrl, attributed, unattributed: total - attributed, total };
 }
 
 // Mock: deterministic per-combo lead counts so sample mode still works.

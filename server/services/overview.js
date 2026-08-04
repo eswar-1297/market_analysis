@@ -157,9 +157,12 @@ export function overviewMock(combos, start, end, country = 'US') {
   return finalize(combos, agg);
 }
 
-function pctChange(cur, prev, lowerIsBetter = false) {
+// See aggregate.js pctChange: counts treat a zero baseline as a multiple
+// (0 -> 3 = 300%), rates/averages show no delta when there is no baseline.
+function pctChange(cur, prev, lowerIsBetter = false, isRate = false) {
   if (!cur && !prev) return null;
-  let pct = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
+  if (prev === 0 && isRate) return null;
+  let pct = prev === 0 ? cur * 100 : ((cur - prev) / prev) * 100;
   pct = Math.round(pct) || 0; // normalize -0 (and NaN) to 0
   const eff = lowerIsBetter ? -pct : pct;
   return { pct, dir: eff > 0 ? 'up' : eff < 0 ? 'down' : 'flat' };
@@ -174,11 +177,11 @@ export function withDeltas(curRows, prevRows) {
     return {
       ...r,
       deltas: {
-        position: pctChange(r.position, p.position || 0, true),
+        position: pctChange(r.position, p.position || 0, true, true), // average
         impressions: pctChange(r.impressions, p.impressions || 0),
         clicks: pctChange(r.clicks, p.clicks || 0),
         views: pctChange(r.views, p.views || 0),
-        bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true),
+        bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true, true), // rate
         leads: pctChange(r.leads, p.leads || 0),
         ppcLeads: pctChange(r.ppcLeads, p.ppcLeads || 0),
       },

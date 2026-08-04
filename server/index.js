@@ -9,9 +9,8 @@ import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
 import { adsLeads } from './connectors/googleAds.js';
 import { pagespeedPage } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
-import { pageAuthor } from './connectors/authors.js';
 import { getOverview, withDeltas } from './services/overview.js';
-import { getLeadsByCombo } from './connectors/hubspot.js';
+import { getLeadsByCombo, getLeadsByPage } from './connectors/hubspot.js';
 import { previousPeriod, toISO } from './services/dates.js';
 import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
@@ -210,6 +209,7 @@ app.get('/api/combinations', (req, res) => {
     data.combinations.map((c) => ({
       id: c.id,
       name: c.name,
+      author: c.author || null,
       pageCount: c.pages.length,
       owners: c.owners,
       excludeFromOverview: Boolean(c.excludeFromOverview),
@@ -283,30 +283,66 @@ app.get('/api/combinations/:id', async (req, res) => {
     );
     result.pages = result.pages.map((p) => ({ ...p, ppc: ppcUrls.has(p.url) }));
 
-    // Combination-level PPC leads = Google Ads conversions summed over the PPC
-    // (ad) pages only. Shown as a badge beside the title, alongside organic leads.
+    // Google Ads conversions per page — the PPC equivalent of a HubSpot lead.
+    const adsConvFor = (pg) => (pg.ads || []).reduce((s, d) => s + (d.conversions || 0), 0);
+    const adsByUrl = {};
+    for (const pg of currentPages) if (ppcUrls.has(pg.url)) adsByUrl[pg.url] = Math.round(adsConvFor(pg));
+    const prevAdsByUrl = {};
+    if (wantCompare) {
+      for (const pg of previousPages) if (ppcUrls.has(pg.url)) prevAdsByUrl[pg.url] = Math.round(adsConvFor(pg));
+    }
+
+    // Per-page leads. Organic pages get their share of this combination's HubSpot
+    // leads, split by each page's own source->destination pair; leads that are
+    // generic or ambiguous stay unattributed, so the organic column sums to
+    // `leadsAttributed` (which can be less than the combination's true total).
+    // Paid pages instead show their own Google Ads conversions.
+    const pageLeads = await getLeadsByPage(combo, start, end, country);
+    // Same attribution over the comparison window, so each page can show its own
+    // growth/decline rather than only the subtotal having one.
+    const prevPageLeads = wantCompare ? await getLeadsByPage(combo, prev.start, prev.end, country) : null;
+    // Leads are a count, so a zero baseline is read as a multiple: 0 -> 3 is 300%.
+    const leadsDelta = (cur, was) => {
+      if (cur == null || was == null || (!cur && !was)) return null;
+      const pct = was === 0 ? cur * 100 : Math.round(((cur - was) / was) * 100) || 0;
+      return { pct, dir: pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat' };
+    };
+    result.pages = result.pages.map((p) => {
+      const cur = p.ppc ? adsByUrl[p.url] ?? null : pageLeads.byUrl[p.url] ?? null;
+      const was = !wantCompare ? null : p.ppc ? prevAdsByUrl[p.url] ?? null : prevPageLeads.byUrl[p.url] ?? null;
+      return { ...p, leads: cur, deltas: { ...p.deltas, leads: leadsDelta(cur, was) } };
+    });
+    result.totals.leadsAttributed = pageLeads.attributed;
+    result.totals.leadsUnattributed = pageLeads.unattributed;
+
+    // Combination-level PPC leads = the per-page conversions above, summed, so the
+    // paid subtotal always equals the sum of its rows.
     const sumAdsConv = (arr) =>
-      arr
-        .filter((pg) => ppcUrls.has(pg.url))
-        .reduce((tot, pg) => tot + (pg.ads || []).reduce((s, d) => s + (d.conversions || 0), 0), 0);
-    result.totals.ppcLeads = Math.round(sumAdsConv(currentPages));
+      arr.filter((pg) => ppcUrls.has(pg.url)).reduce((tot, pg) => tot + adsConvFor(pg), 0);
+    result.totals.ppcLeads = Object.values(adsByUrl).reduce((a, b) => a + b, 0);
     result.hasPpcPages = currentPages.some((pg) => ppcUrls.has(pg.url));
     if (wantCompare) {
       // Growth/decline vs the comparison period for organic, PPC, and combined
       // leads — shown next to each leads chip in the page table.
       const mk = (cur, prev) => {
         if (!cur && !prev) return null;
-        const pct = prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100) || 0;
+        const pct = prev === 0 ? cur * 100 : Math.round(((cur - prev) / prev) * 100) || 0;
         return { pct, dir: pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat' };
       };
       const orgCur = result.totals.leads;
       const orgPrev = Math.round(result.deltas.leads?.previous ?? 0);
       const ppcCur = result.totals.ppcLeads;
       const ppcPrev = Math.round(sumAdsConv(previousPages));
+      // The organic subtotal in the table shows ATTRIBUTED leads, so its delta has
+      // to compare attributed vs attributed — not the combination's true totals,
+      // which is what the title badge uses. (prevPageLeads is computed above.)
       result.leadsDeltas = {
         organic: mk(orgCur, orgPrev),
+        attributed: mk(pageLeads.attributed, prevPageLeads.attributed),
         ppc: mk(ppcCur, ppcPrev),
-        total: mk(orgCur + ppcCur, orgPrev + ppcPrev),
+        total: mk(pageLeads.attributed + ppcCur, prevPageLeads.attributed + ppcPrev),
+        // For the title badge: every lead the combination produced, organic + paid.
+        combined: mk(orgCur + ppcCur, orgPrev + ppcPrev),
       };
     }
     res.json({ ...result, range: { start, end }, previousRange: wantCompare ? prev : null, country, dataMode: overallMode() });
@@ -316,46 +352,30 @@ app.get('/api/combinations/:id', async (req, res) => {
   }
 });
 
-// Article authors for a combination (scraped from each page, cached). Lazy so
-// it doesn't slow the main view; the UI shows them at the top right.
-app.get('/api/authors', async (req, res) => {
+// Author index: authorship is assigned per combination in combinations.json
+// (data/combinations.json -> author), so every page in a combination belongs to
+// that combination's author. Grouping is pure config — no page scraping.
+// Paid (PPC) landing pages are excluded: they're ad pages, not authored articles,
+// so they count towards nobody even when they sit inside an authored combination.
+function buildAuthorIndex() {
   const data = loadCombinations();
-  const combo = data.combinations.find((c) => c.id === req.query.id);
-  if (!combo) return res.status(404).json({ error: 'Combination not found' });
-  const byPage = {};
-  await Promise.all(
-    combo.pages.map(async (p) => {
-      byPage[p.url] = await pageAuthor(p.url);
-    })
+  const ppcUrls = new Set(
+    data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
   );
-  const authors = [...new Set(Object.values(byPage).filter(Boolean))];
-  res.json({ authors, byPage });
-});
-
-// Author index: scrape every page's author once (cached), group pages by author.
-let authorIndex = null;
-let authorIndexAt = 0;
-async function buildAuthorIndex() {
-  if (authorIndex && Date.now() - authorIndexAt < 60 * 60 * 1000) return authorIndex;
-  const data = loadCombinations();
   const byAuthor = {};
-  await Promise.all(
-    data.combinations.flatMap((c) =>
-      c.pages.map(async (pg) => {
-        const name = await pageAuthor(pg.url);
-        if (!name) return;
-        (byAuthor[name] = byAuthor[name] || []).push({ url: pg.url, label: pg.label, combo: c.name });
-      })
-    )
-  );
-  authorIndex = { authors: Object.keys(byAuthor).sort(), byAuthor };
-  authorIndexAt = Date.now();
-  return authorIndex;
+  for (const c of data.combinations) {
+    if (!c.author) continue;
+    for (const pg of c.pages) {
+      if (ppcUrls.has(pg.url)) continue;
+      (byAuthor[c.author] = byAuthor[c.author] || []).push({ url: pg.url, label: pg.label, combo: c.name });
+    }
+  }
+  return { authors: Object.keys(byAuthor).sort(), byAuthor };
 }
 
-app.get('/api/authors-index', async (req, res) => {
+app.get('/api/authors-index', (req, res) => {
   try {
-    const idx = await buildAuthorIndex();
+    const idx = buildAuthorIndex();
     res.json({ authors: idx.authors.map((a) => ({ name: a, pageCount: idx.byAuthor[a].length })) });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -367,7 +387,7 @@ app.get('/api/author', async (req, res) => {
   try {
     const name = req.query.name;
     if (!name) return res.status(400).json({ error: 'name required' });
-    const idx = await buildAuthorIndex();
+    const idx = buildAuthorIndex();
     const pages = idx.byAuthor[name] || [];
     const range = defaultRange();
     const start = req.query.start || range.start;
@@ -383,6 +403,37 @@ app.get('/api/author', async (req, res) => {
       fetchCombinationPages(pages, prev.start, prev.end, country, true),
     ]);
     const result = aggregateCombination({ id: 'author', name, owners: {}, pages }, currentPages, previousPages);
+
+    // Per-page leads. Authorship is assigned per combination, so run the very same
+    // attribution the combination view uses for each of this author's combinations
+    // and merge the results — that way a page shows the identical number in both
+    // views. Pages the author doesn't own simply aren't in this map.
+    const cfg = loadCombinations();
+    const leadsByUrl = {};
+    const prevLeadsByUrl = {};
+    for (const c of cfg.combinations) {
+      if (c.author !== name) continue;
+      const [cur, was] = await Promise.all([
+        getLeadsByPage(c, start, end, country),
+        getLeadsByPage(c, prev.start, prev.end, country),
+      ]);
+      Object.assign(leadsByUrl, cur.byUrl);
+      Object.assign(prevLeadsByUrl, was.byUrl);
+    }
+    // Leads are a count, so a zero baseline is read as a multiple: 0 -> 3 is 300%.
+    const leadsDelta = (cur, was) => {
+      if (cur == null || was == null || (!cur && !was)) return null;
+      const pct = was === 0 ? cur * 100 : Math.round(((cur - was) / was) * 100) || 0;
+      return { pct, dir: pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat' };
+    };
+    result.pages = result.pages.map((p) => ({
+      ...p,
+      leads: leadsByUrl[p.url] ?? null,
+      deltas: { ...p.deltas, leads: leadsDelta(leadsByUrl[p.url] ?? null, prevLeadsByUrl[p.url] ?? null) },
+    }));
+    // Sum the rows actually shown, so the subtotal always matches the column.
+    result.totals.leadsAttributed = result.pages.reduce((s, p) => s + (p.leads || 0), 0);
+
     res.json({ ...result, range: { start, end }, country, dataMode: overallMode() });
   } catch (e) {
     console.error(e);

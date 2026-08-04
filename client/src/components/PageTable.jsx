@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import ColumnFilter from './ColumnFilter.jsx';
 import { makeRanges, fmtRound, inRange } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
@@ -73,7 +74,7 @@ function SummaryRow({ label, cls, rows, perfCells, leadsValue, leadsDelta }) {
   );
 }
 
-export default function PageTable({ pages: allPages, compare = true, leads, leadsDeltas }) {
+export default function PageTable({ pages: allPages, compare = true, leadsDeltas }) {
   // Performance score loads lazily per page (slow PageSpeed call), so the table
   // renders instantly and the Perf. cell fills in when ready.
   const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
@@ -93,28 +94,38 @@ export default function PageTable({ pages: allPages, compare = true, leads, lead
     };
   }, [allPages]);
 
-  // Per-column range filters (same UI/logic as the overview table). Leads isn't
-  // a per-page metric, so it has no filter.
+  // Page leads sits in its own column (second), so it's declared separately from
+  // the metric columns but filters through exactly the same machinery.
+  const leadsCol = { key: 'leads', label: 'Page leads', get: (p) => p.leads, format: (v) => String(Math.round(v)) };
+
+  // Per-column range filters, applied from the column headers (same UI/logic as
+  // the overview table).
   const filterCols = [
-    { key: 'position', get: (p) => p.position, format: (v) => String(Math.round(v)) },
-    { key: 'impressions', get: (p) => p.impressions, format: fmtRound },
-    { key: 'clicks', get: (p) => p.clicks, format: fmtRound },
-    { key: 'views', get: (p) => p.views, format: fmtRound },
-    { key: 'bounceRate', get: (p) => p.bounceRate, format: (v) => Math.round(v * 100) + '%' },
-    { key: 'perf', get: (p) => perf[p.url], format: (v) => String(Math.round(v)) },
+    { key: 'position', label: 'Avg. position', get: (p) => p.position, format: (v) => String(Math.round(v)) },
+    { key: 'impressions', label: 'Impressions', get: (p) => p.impressions, format: fmtRound },
+    { key: 'clicks', label: 'Organic clicks', get: (p) => p.clicks, format: fmtRound },
+    { key: 'views', label: 'Views', get: (p) => p.views, format: fmtRound },
+    { key: 'bounceRate', label: 'Bounce rate', get: (p) => p.bounceRate, format: (v) => Math.round(v * 100) + '%' },
+    { key: 'perf', label: 'Perf.', get: (p) => perf[p.url], format: (v) => String(Math.round(v)) },
   ];
+  const allFilterCols = [leadsCol, ...filterCols];
   const ranges = useMemo(() => {
     const out = {};
-    for (const c of filterCols) out[c.key] = makeRanges(allPages.map(c.get), c.format);
+    for (const c of allFilterCols) out[c.key] = makeRanges(allPages.map(c.get), c.format);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allPages, perf]);
   const pages = useMemo(
-    () => allPages.filter((p) => filterCols.every((c) => inRange(c.get(p), filters[c.key]))),
+    () => allPages.filter((p) => allFilterCols.every((c) => inRange(c.get(p), filters[c.key]))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [allPages, filters, perf]
   );
   const anyFilter = Object.values(filters).some(Boolean);
+
+  // Lead subtotals come from the rows currently VISIBLE, so they always equal the
+  // Page leads column above them — including when filters hide rows. The figure
+  // beside the title stays the combination's full total and is unaffected.
+  const sumLeads = (rows) => rows.reduce((s, p) => s + (p.leads || 0), 0);
 
   const organicPages = pages.filter((p) => !p.ppc);
   const ppcPages = pages.filter((p) => p.ppc);
@@ -146,9 +157,19 @@ export default function PageTable({ pages: allPages, compare = true, leads, lead
             {p.label}
           </a>
           {p.ppc && <span className="chan-badge ppc">PPC</span>}
-          {p.author && <span className="page-author">{p.author}</span>}
         </td>
-        <td className="lead-cell" />
+        {/* Leads attributed to this specific page by its source->destination
+            pair. null = the page has no pair (ad pages), so "—" not "0". */}
+        <td className="lead-cell">
+          {p.leads == null ? (
+            <span className="lead-na">—</span>
+          ) : (
+            <>
+              <div className="cell-val">{fmt(p.leads)}</div>
+              {compare && <Delta d={dl.leads} />}
+            </>
+          )}
+        </td>
         <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
         <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
         <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
@@ -175,41 +196,27 @@ export default function PageTable({ pages: allPages, compare = true, leads, lead
         </div>
       )}
       <div className="table-card">
-        <table>
+        <table className="fixed-table">
           <thead>
             <tr>
               <th>Page</th>
-              <th>Leads</th>
-              <th>Avg. position</th>
-              <th>Impressions</th>
-              <th>Organic clicks</th>
-              <th>Views</th>
-              <th>Bounce rate</th>
-              <th>Perf.</th>
-            </tr>
-            <tr className="filter-row">
-              <td />
-              <td />
-              {filterCols.map((c) => (
-                <td key={c.key}>
-                  {ranges[c.key].length > 0 && (
-                    <select
-                      className="col-filter"
-                      value={filters[c.key]?.idx ?? ''}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFilters((f) => ({ ...f, [c.key]: v === '' ? undefined : { ...ranges[c.key][+v], idx: +v } }));
-                      }}
-                    >
-                      <option value="">All</option>
-                      {ranges[c.key].map((rg, i) => (
-                        <option key={i} value={i}>
-                          {rg.label}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </td>
+              {/* "Page leads" first, then the metric columns — every one filterable
+                  from its own header. Page leads are the leads attributed to that
+                  specific page, which can total less than the title's figure. */}
+              {allFilterCols.map((c) => (
+                <th key={c.key}>
+                  <ColumnFilter
+                    label={c.label}
+                    options={ranges[c.key]}
+                    value={filters[c.key]?.idx ?? null}
+                    onChange={(idx) =>
+                      setFilters((f) => ({
+                        ...f,
+                        [c.key]: idx == null ? undefined : { ...ranges[c.key][idx], idx },
+                      }))
+                    }
+                  />
+                </th>
               ))}
             </tr>
           </thead>
@@ -224,23 +231,23 @@ export default function PageTable({ pages: allPages, compare = true, leads, lead
               <>
                 {/* Organic group: pages + cumulative subtotal (blue accent) */}
                 {organicPages.map((p) => renderRow(p, 'grp-org'))}
-                <SummaryRow cls="group-total grp-org" rows={organicPages} perfCells={groupPerf(organicPages)} leadsValue={leads?.organic ?? 0} leadsDelta={leadsDeltas?.organic} />
+                <SummaryRow cls="group-total grp-org" rows={organicPages} perfCells={groupPerf(organicPages)} leadsValue={sumLeads(organicPages)} leadsDelta={anyFilter ? null : leadsDeltas?.organic} />
 
                 {/* Gap between the two groups */}
                 <tr className="grp-gap"><td colSpan={8} /></tr>
 
                 {/* PPC group: pages + cumulative subtotal (amber accent) */}
                 {ppcPages.map((p) => renderRow(p, 'grp-ppc'))}
-                <SummaryRow cls="group-total ppc grp-ppc" rows={ppcPages} perfCells={groupPerf(ppcPages)} leadsValue={leads?.ppc ?? 0} leadsDelta={leadsDeltas?.ppc} />
+                <SummaryRow cls="group-total ppc grp-ppc" rows={ppcPages} perfCells={groupPerf(ppcPages)} leadsValue={sumLeads(ppcPages)} leadsDelta={anyFilter ? null : leadsDeltas?.ppc} />
 
                 {/* Grand total across both groups (organic + PPC) */}
-                <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={(leads?.organic ?? 0) + (leads?.ppc ?? 0)} leadsDelta={leadsDeltas?.total} />
+                <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={sumLeads(pages)} leadsDelta={anyFilter ? null : leadsDeltas?.total} />
               </>
             ) : (
               <>
                 {pages.map((p) => renderRow(p))}
                 {pages.length > 1 && (
-                  <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={leads ? (leads.organic ?? 0) + (leads.ppc ?? 0) : null} leadsDelta={leadsDeltas?.total} />
+                  <SummaryRow cls="total-row" label="Total" rows={pages} perfCells={groupPerf(pages)} leadsValue={sumLeads(pages)} leadsDelta={anyFilter ? null : leadsDeltas?.total} />
                 )}
               </>
             )}

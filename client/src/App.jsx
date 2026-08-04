@@ -210,6 +210,13 @@ export default function App() {
   const ovKey = `ov|${start}|${end}|${country}|${compare ? cstart : ''}|${compare ? cend : ''}`;
   const ovRow = comboId ? dataCache.current.get(ovKey)?.rows?.find((r) => r.id === selectedId) : null;
   const detailReady = detail && detail.id === selectedId;
+  // Title badge = every lead the combination produced: the full organic total
+  // (including leads no single page can claim) PLUS paid/PPC conversions.
+  // Prefer the detail response so the badge agrees with the table's PPC subtotal;
+  // fall back to the cached overview row so it renders instantly.
+  const organicLeads = ovRow ? ovRow.leads : detailReady ? detail.totals?.leads : null;
+  const ppcLeads = detailReady ? detail.totals?.ppcLeads ?? 0 : ovRow ? ovRow.ppcLeads ?? 0 : 0;
+  const titleLeads = organicLeads == null ? null : organicLeads + ppcLeads;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
   const title = comboId ? (selectedCombo ? selectedCombo.name : 'Loading…') : authorMode ? `Author: ${author}` : 'All combinations';
   const regionLabel = meta?.regions.find((r) => r.code === country)?.label || country;
@@ -355,7 +362,32 @@ export default function App() {
 
       <main className="main">
         <div className="title-row">
-          <h1 className="h1">{title}</h1>
+          {/* All leads for the combination — every source->destination variant
+              (including the ones no single page can claim) plus PPC conversions.
+              Rendered inside the h1 so it inherits the title's exact font and size. */}
+          <h1 className="h1">
+            {title}
+            {comboId && titleLeads != null && (
+              <span
+                className="h1-leads"
+                title={`All leads for this combination: ${organicLeads} organic + ${ppcLeads} PPC`}
+              >
+                {' - '}({titleLeads})
+              </span>
+            )}
+          </h1>
+          {comboId && compare && detailReady && <LeadsDelta d={detail.leadsDeltas?.combined} />}
+          {/* Authorship is per combination (data/combinations.json), shown top-right of the title. */}
+          {comboId && selectedCombo?.author && (
+            <button
+              type="button"
+              className="title-author"
+              onClick={() => goAuthor(selectedCombo.author)}
+              title={`See all pages by ${selectedCombo.author}`}
+            >
+              {selectedCombo.author}
+            </button>
+          )}
         </div>
 
         {error && <div className="warn-banner">Error: {error}</div>}
@@ -375,6 +407,8 @@ export default function App() {
 
         {!loading && authorMode && authorData && (
           authorData.pages.length ? (
+            // Subtotals are summed from the visible rows inside PageTable, so no
+            // totals need passing in.
             <PageTable pages={authorData.pages} compare={compare} />
           ) : (
             <div className="loading">No pages found for this author.</div>
@@ -385,8 +419,14 @@ export default function App() {
           <PageTable
             pages={detail.pages}
             compare={compare}
-            leads={{ organic: ovRow ? ovRow.leads : detail.totals?.leads, ppc: detail.totals?.ppcLeads }}
-            leadsDeltas={compare ? detail.leadsDeltas : null}
+            // In-table subtotals are summed from the visible rows by PageTable, so
+            // they follow the filters. The combination's TRUE total (including
+            // leads no single page can claim, plus PPC) is the badge by the title.
+            leadsDeltas={
+              compare && detail.leadsDeltas
+                ? { ...detail.leadsDeltas, organic: detail.leadsDeltas.attributed }
+                : null
+            }
           />
         )}
       </main>

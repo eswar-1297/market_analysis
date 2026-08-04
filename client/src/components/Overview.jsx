@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import ColumnFilter from './ColumnFilter.jsx';
 import { makeRanges, fmtRound, inRange } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
@@ -47,16 +48,16 @@ export default function Overview({ rows, onOpen, compare = false }) {
     };
   }, [rows]);
 
-  // Numeric columns that get a range-dropdown filter (in header order).
+  // Numeric columns that get a range filter on their header (in header order).
   const cols = [
-    { key: 'position', get: (r) => r.position, format: (v) => String(Math.round(v)) },
-    { key: 'impressions', get: (r) => r.impressions, format: fmtRound },
-    { key: 'clicks', get: (r) => r.clicks, format: fmtRound },
-    { key: 'views', get: (r) => r.views, format: fmtRound },
-    { key: 'bounceRate', get: (r) => r.bounceRate, format: (v) => Math.round(v * 100) + '%' },
-    { key: 'leads', get: (r) => r.leads, format: (v) => String(Math.round(v)) },
-    { key: 'ppcLeads', get: (r) => r.ppcLeads, format: (v) => String(Math.round(v)) },
-    { key: 'perf', get: (r) => perf[r.id], format: (v) => String(Math.round(v)) },
+    { key: 'position', label: 'Avg. position', get: (r) => r.position, format: (v) => String(Math.round(v)) },
+    { key: 'impressions', label: 'Impressions', get: (r) => r.impressions, format: fmtRound },
+    { key: 'clicks', label: 'Organic clicks', get: (r) => r.clicks, format: fmtRound },
+    { key: 'views', label: 'Views', get: (r) => r.views, format: fmtRound },
+    { key: 'bounceRate', label: 'Bounce rate', get: (r) => r.bounceRate, format: (v) => Math.round(v * 100) + '%' },
+    { key: 'leads', label: 'Organic Leads', get: (r) => r.leads, format: (v) => String(Math.round(v)) },
+    { key: 'ppcLeads', label: 'PPC Leads', get: (r) => r.ppcLeads, format: (v) => String(Math.round(v)) },
+    { key: 'perf', label: 'Perf.', get: (r) => perf[r.id], format: (v) => String(Math.round(v)) },
   ];
 
   // Range options per column, derived from the current data (recomputed as perf
@@ -88,41 +89,24 @@ export default function Overview({ rows, onOpen, compare = false }) {
         </div>
       )}
       <div className="table-card">
-        <table>
+        <table className="fixed-table">
           <thead>
             <tr>
               <th>Combination</th>
-              <th>Avg. position</th>
-              <th>Impressions</th>
-              <th>Organic clicks</th>
-              <th>Views</th>
-              <th>Bounce rate</th>
-              <th>Organic Leads</th>
-              <th>PPC Leads</th>
-              <th>Perf.</th>
-            </tr>
-            <tr className="filter-row">
-              <td />
               {cols.map((c) => (
-                <td key={c.key}>
-                  {ranges[c.key].length > 0 && (
-                    <select
-                      className="col-filter"
-                      value={filters[c.key]?.idx ?? ''}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFilters((f) => ({ ...f, [c.key]: v === '' ? undefined : { ...ranges[c.key][+v], idx: +v } }));
-                      }}
-                    >
-                      <option value="">All</option>
-                      {ranges[c.key].map((rg, i) => (
-                        <option key={i} value={i}>
-                          {rg.label}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </td>
+                <th key={c.key}>
+                  <ColumnFilter
+                    label={c.label}
+                    options={ranges[c.key]}
+                    value={filters[c.key]?.idx ?? null}
+                    onChange={(idx) =>
+                      setFilters((f) => ({
+                        ...f,
+                        [c.key]: idx == null ? undefined : { ...ranges[c.key][idx], idx },
+                      }))
+                    }
+                  />
+                </th>
               ))}
             </tr>
           </thead>

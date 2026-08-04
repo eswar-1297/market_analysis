@@ -106,10 +106,18 @@ function pageWeightedPosition(p) {
 
 const pageMetric = (p, src, f) => Math.round(total(p[src].map((d) => ({ value: d[f] }))));
 
-// Per-page % change vs the previous period (Google-Analytics style).
-function pctChange(cur, prev, lowerIsBetter = false) {
+// Per-page % change vs the previous period.
+// A ZERO baseline is handled by kind:
+//   * counts (leads, clicks, impressions, views) — the new value IS the multiple,
+//     so 0 -> 3 reads as 300% (tripled), not a capped 100%.
+//   * rates/averages (`isRate`: Avg. position, Bounce rate) — a zero baseline means
+//     there was no data last period, and "tripled" is meaningless for a rate, so
+//     there is simply nothing to compare and no delta is shown.
+// Non-zero baselines keep the standard percentage-increase formula.
+function pctChange(cur, prev, lowerIsBetter = false, isRate = false) {
   if (!cur && !prev) return null; // nothing to compare
-  let pct = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
+  if (prev === 0 && isRate) return null; // no baseline for a rate/average
+  let pct = prev === 0 ? cur * 100 : ((cur - prev) / prev) * 100;
   pct = Math.round(pct) || 0; // normalize -0 (and NaN) to 0
   const effective = lowerIsBetter ? -pct : pct;
   return { pct, dir: effective > 0 ? 'up' : effective < 0 ? 'down' : 'flat' };
@@ -137,14 +145,13 @@ function pageSummary(p, prev) {
   return {
     url: p.url,
     label: p.label,
-    author: p.author || null,
     ...cur,
     deltas: {
       views: pctChange(cur.views, pv.views || 0),
-      bounceRate: pctChange(cur.bounceRate, pv.bounceRate || 0, true), // lower bounce is better
+      bounceRate: pctChange(cur.bounceRate, pv.bounceRate || 0, true, true), // rate; lower is better
       clicks: pctChange(cur.clicks, pv.clicks || 0),
       impressions: pctChange(cur.impressions, pv.impressions || 0),
-      position: pctChange(cur.position, pv.position || 0, true),
+      position: pctChange(cur.position, pv.position || 0, true, true), // average; lower is better
     },
     modes: p.modes,
   };
