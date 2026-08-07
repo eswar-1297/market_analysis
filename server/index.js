@@ -7,7 +7,8 @@ import { fileURLToPath } from 'url';
 import { config, sources, overallMode, modeFor, hasMsAuth } from './config.js';
 import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
 import { adsLeads } from './connectors/googleAds.js';
-import { pagespeedPage } from './connectors/pagespeed.js';
+import { mountMcp } from './mcp.js';
+import { pagespeedPage, warmPagespeedCache } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { getOverview, withDeltas } from './services/overview.js';
 import { getLeadsByCombo, getLeadsByPage } from './connectors/hubspot.js';
@@ -74,6 +75,11 @@ const app = express();
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+
+// Read-only MCP endpoint at /mcp (GA4 + Search Console + Google Ads) so Claude
+// can answer marketing questions. Mounted BEFORE the /api auth middleware since
+// it has its own protection model. (OAuth for org connectors is layered next.)
+mountMcp(app, '/mcp');
 
 // --- Auth: Microsoft (Entra ID) sign-in ---
 // The app session token is a deterministic HMAC (stays valid across restarts,
@@ -557,4 +563,15 @@ app.listen(config.port, () => {
       .map(([k]) => k)
       .join(', ') || 'none (all sample data)'}\n`
   );
+  // Core Web Vitals are ~20s per page from PageSpeed, so fetch them in the
+  // background now rather than making the first visitor wait per row. Results
+  // persist to disk, so this is usually a no-op after the first run.
+  if (modeFor('pagespeed') === 'live') {
+    try {
+      const urls = loadCombinations().combinations.flatMap((c) => c.pages.map((p) => p.url));
+      warmPagespeedCache(urls);
+    } catch (e) {
+      console.warn('[pagespeed] warm-up skipped:', e.message);
+    }
+  }
 });

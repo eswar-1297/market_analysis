@@ -24,6 +24,19 @@ function getCustomer() {
   return customer;
 }
 
+// Run an arbitrary READ-ONLY GAQL query against the Ads account. Only SELECT is
+// allowed — any mutate/DML keyword is rejected — so this can never change the
+// account. Used by the MCP server to answer open-ended Ads questions.
+export async function adsQuery(gaql) {
+  const q = String(gaql || '').trim();
+  if (!/^select\b/i.test(q)) throw new Error('Only read-only SELECT queries are allowed.');
+  if (/\b(insert|update|delete|create|remove|mutate|drop|alter)\b/i.test(q)) {
+    throw new Error('Write/DML keywords are not allowed — this connection is read-only.');
+  }
+  const cust = getCustomer();
+  return cust.query(q);
+}
+
 // Note: `country` is accepted for signature parity. Sample data reflects the
 // region; live Google Ads geo attribution per landing page needs a
 // geographic_view join and is left account-wide for now.

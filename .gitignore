@@ -11,6 +11,9 @@ client/dist/
 *.key.json
 service-account*.json
 
+# on-disk caches (PageSpeed scores) — regenerated at runtime
+data/.cache/
+
 # logs / runtime
 *.log
 .pm2/
