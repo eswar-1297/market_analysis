@@ -8,6 +8,9 @@ import { config, sources, overallMode, modeFor, hasMsAuth } from './config.js';
 import { ppcLive, ppcMock } from './connectors/ga4Ppc.js';
 import { adsLeads } from './connectors/googleAds.js';
 import { mountMcp } from './mcp.js';
+import { mcpOAuthProvider, mountMcpOAuthCallback } from './mcpAuth.js';
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { pagespeedPage, warmPagespeedCache } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { getOverview, withDeltas } from './services/overview.js';
@@ -77,9 +80,31 @@ app.use(cors());
 app.use(express.json());
 
 // Read-only MCP endpoint at /mcp (GA4 + Search Console + Google Ads) so Claude
-// can answer marketing questions. Mounted BEFORE the /api auth middleware since
-// it has its own protection model. (OAuth for org connectors is layered next.)
-mountMcp(app, '/mcp');
+// can answer marketing questions. When Microsoft auth is configured, the /mcp
+// connector is protected by per-user OAuth (login delegated to Entra); the SDK
+// router publishes the spec-compliant discovery/token/registration endpoints.
+if (hasMsAuth) {
+  const issuerUrl = new URL(config.publicUrl);
+  const resourceServerUrl = new URL(config.publicUrl + '/mcp');
+  app.use(
+    mcpAuthRouter({
+      provider: mcpOAuthProvider,
+      issuerUrl,
+      resourceServerUrl,
+      scopesSupported: ['read'],
+      resourceName: 'CloudFuze Marketing Analytics',
+    })
+  );
+  mountMcpOAuthCallback(app);
+  const authMiddleware = requireBearerAuth({
+    verifier: mcpOAuthProvider,
+    resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
+  });
+  mountMcp(app, '/mcp', { authMiddleware });
+} else {
+  // No Microsoft auth configured — fall back to the MCP_TOKEN guard.
+  mountMcp(app, '/mcp');
+}
 
 // --- Auth: Microsoft (Entra ID) sign-in ---
 // The app session token is a deterministic HMAC (stays valid across restarts,

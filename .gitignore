@@ -13,6 +13,8 @@ service-account*.json
 
 # on-disk caches (PageSpeed scores) — regenerated at runtime
 data/.cache/
+# MCP OAuth: dynamically-registered clients (runtime, per-deployment)
+data/mcp-oauth-clients.json
 
 # logs / runtime
 *.log

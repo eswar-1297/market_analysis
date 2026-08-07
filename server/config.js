@@ -2,6 +2,10 @@ import 'dotenv/config';
 
 export const config = {
   port: Number(process.env.PORT) || 4000,
+  // Public base URL of the deployed app (no trailing slash). Used to build the
+  // OAuth issuer/redirect URLs for the /mcp connector. Set PUBLIC_BASE_URL in
+  // production, e.g. https://cloudfuzeanalytics.cftools.live
+  publicUrl: (process.env.PUBLIC_BASE_URL || `http://localhost:${Number(process.env.PORT) || 4000}`).replace(/\/$/, ''),
   ga4PropertyId: (process.env.GA4_PROPERTY_ID || '').trim(),
   googleAppCreds: (process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim(),
   // Deployment-friendly: full service-account JSON in one env var — accepts

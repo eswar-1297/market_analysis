@@ -149,23 +149,23 @@ export function buildMcpServer() {
   return server;
 }
 
-// Interim protection until full OAuth is in place: if MCP_TOKEN is set, require
-// `Authorization: Bearer <MCP_TOKEN>`. This keeps the public endpoint from
-// exposing GA/Ads data to anyone with the URL. Left open only when MCP_TOKEN is
-// unset (local dev). Replaced by per-user OAuth for the org connector.
-function mcpAuthOk(req) {
+// Interim fallback protection when OAuth ISN'T configured: if MCP_TOKEN is set,
+// require `Authorization: Bearer <MCP_TOKEN>`. Used only when Microsoft/OAuth
+// auth is absent. When OAuth is on, `authMiddleware` (per-user bearer) is used
+// instead and this is bypassed.
+function tokenGuard(req, res, next) {
   const required = (process.env.MCP_TOKEN || '').trim();
-  if (!required) return true; // local dev — no token configured
+  if (!required) return next(); // local dev — no token configured
   const [scheme, token] = (req.headers.authorization || '').split(' ');
-  return scheme === 'Bearer' && token === required;
+  if (scheme === 'Bearer' && token === required) return next();
+  return res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null });
 }
 
-// Mount the MCP endpoint on the Express app (stateless Streamable HTTP).
-export function mountMcp(app, pathname = '/mcp') {
-  app.post(pathname, async (req, res) => {
-    if (!mcpAuthOk(req)) {
-      return res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null });
-    }
+// Mount the MCP endpoint (stateless Streamable HTTP). `authMiddleware`, when
+// provided (per-user OAuth), protects the endpoint; otherwise the MCP_TOKEN
+// fallback guard is used.
+export function mountMcp(app, pathname = '/mcp', { authMiddleware } = {}) {
+  const handle = async (req, res) => {
     const server = buildMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
@@ -178,7 +178,9 @@ export function mountMcp(app, pathname = '/mcp') {
     } catch (e) {
       if (!res.headersSent) res.status(500).json({ error: e.message });
     }
-  });
+  };
+  if (authMiddleware) app.post(pathname, authMiddleware, handle);
+  else app.post(pathname, tokenGuard, handle);
   // Stateless mode: GET/DELETE (session streams) aren't supported.
   const methodNotAllowed = (req, res) =>
     res.status(405).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null });
