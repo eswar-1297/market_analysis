@@ -20,6 +20,11 @@ import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
 import { REGIONS, DEFAULT_COUNTRY, isValidCountry } from './regions.js';
 
+// The MCP SDK's HTTP transport relies on the Web Crypto `crypto` global, which
+// isn't defined by default on Node < 20. Polyfill it so /mcp works regardless
+// of the deployed Node version (the host runs an older Node than local dev).
+if (!globalThis.crypto) globalThis.crypto = crypto.webcrypto;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const COMBOS_FILE = path.join(DATA_DIR, 'combinations.json');
