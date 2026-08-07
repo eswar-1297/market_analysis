@@ -295,11 +295,15 @@ app.get('/api/combinations/:id', async (req, res) => {
     // halves the work (no second round of per-page GA4/Search Console calls).
     const wantCompare = Boolean(req.query.cstart && req.query.cend);
     const prev = wantCompare ? { start: req.query.cstart, end: req.query.cend } : previousPeriod(start, end);
+    // Bucket against EVERY combination, not just this one, then read our own row.
+    // A lead belongs to exactly one combination, and with a single-combo list this
+    // one would also claim leads another combination owns (e.g. a "Manage" lead
+    // that happens to name Slack -> Google Chat), disagreeing with the overview.
     const [currentPages, curLeads, previousPages, prevLeads] = await Promise.all([
       fetchCombinationPages(combo.pages, start, end, country, true),
-      getLeadsByCombo([combo], start, end, country),
+      getLeadsByCombo(data.combinations, start, end, country),
       wantCompare ? fetchCombinationPages(combo.pages, prev.start, prev.end, country, true) : Promise.resolve([]),
-      wantCompare ? getLeadsByCombo([combo], prev.start, prev.end, country) : Promise.resolve({ byId: {} }),
+      wantCompare ? getLeadsByCombo(data.combinations, prev.start, prev.end, country) : Promise.resolve({ byId: {} }),
     ]);
     const leads = {
       current: curLeads.byId[combo.id]?.series || [],
@@ -328,10 +332,12 @@ app.get('/api/combinations/:id', async (req, res) => {
     // generic or ambiguous stay unattributed, so the organic column sums to
     // `leadsAttributed` (which can be less than the combination's true total).
     // Paid pages instead show their own Google Ads conversions.
-    const pageLeads = await getLeadsByPage(combo, start, end, country);
+    const pageLeads = await getLeadsByPage(combo, start, end, country, data.combinations);
     // Same attribution over the comparison window, so each page can show its own
     // growth/decline rather than only the subtotal having one.
-    const prevPageLeads = wantCompare ? await getLeadsByPage(combo, prev.start, prev.end, country) : null;
+    const prevPageLeads = wantCompare
+      ? await getLeadsByPage(combo, prev.start, prev.end, country, data.combinations)
+      : null;
     // Leads are a count, so a zero baseline is read as a multiple: 0 -> 3 is 300%.
     const leadsDelta = (cur, was) => {
       if (cur == null || was == null || (!cur && !was)) return null;
@@ -445,8 +451,8 @@ app.get('/api/author', async (req, res) => {
     for (const c of cfg.combinations) {
       if (c.author !== name) continue;
       const [cur, was] = await Promise.all([
-        getLeadsByPage(c, start, end, country),
-        getLeadsByPage(c, prev.start, prev.end, country),
+        getLeadsByPage(c, start, end, country, cfg.combinations),
+        getLeadsByPage(c, prev.start, prev.end, country, cfg.combinations),
       ]);
       Object.assign(leadsByUrl, cur.byUrl);
       Object.assign(prevLeadsByUrl, was.byUrl);

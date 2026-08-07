@@ -699,8 +699,16 @@
       "pages": [
         {
           "url": "https://www.cloudfuze.com/saas-management-software/",
-          "label": "saas-management-software"
+          "label": "saas-management-software",
+          "matchLeadSources": [
+            "Manage",
+            "Manage and Migrate"
+          ]
         }
+      ],
+      "matchLeadSources": [
+        "Manage",
+        "Manage and Migrate"
       ]
     },
     {

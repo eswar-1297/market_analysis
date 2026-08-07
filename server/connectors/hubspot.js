@@ -330,11 +330,18 @@ function comboClouds(c) {
   let src = c.sourceCloud;
   let dst = c.destCloud;
   const keywords = Array.isArray(c.matchKeywords) ? c.matchKeywords : null;
+  // Some products aren't a cloud pair at all — they're identified by the lead
+  // source the rep picked (SaaS Management = the CF Manage product line).
+  const leadSources = Array.isArray(c.matchLeadSources)
+    ? new Set(c.matchLeadSources.map((v) => String(v).toLowerCase().trim()))
+    : null;
   if (!src || !dst) {
     const m = String(c.name || '').split(/\s+to\s+/i);
-    // A keyword-only combination needs no cloud pair at all.
+    // A keyword- or lead-source-only combination needs no cloud pair at all.
     if (m.length !== 2) {
-      if (keywords) return { srcSet: new Set(), dstSet: new Set(), sameCloud: false, keywords };
+      if (keywords || leadSources) {
+        return { srcSet: new Set(), dstSet: new Set(), sameCloud: false, keywords, leadSources };
+      }
       return null; // can't derive — this combo matches nothing
     }
     src = src || m[0];
@@ -349,12 +356,17 @@ function comboClouds(c) {
     // pairing between them (e.g. Microsoft 365 -> Google Workspace).
     sameCloud: Boolean(c.sameCloud),
     keywords,
+    leadSources,
   };
 }
 
 // Does a lead belong to this combination? Raw values are passed in as well as the
 // canonical ones, because keyword matching reads the text the rep actually typed.
-function comboMatches(sets, cs, cd, rawSrc, rawDst) {
+function comboMatches(sets, cs, cd, rawSrc, rawDst, leadSource) {
+  // Lead source identifies the product outright, whatever clouds were typed.
+  if (sets.leadSources && sets.leadSources.has(String(leadSource || '').toLowerCase().trim())) {
+    return true;
+  }
   // Keyword match on EITHER field wins on its own — the lead named a need, not a pair.
   if (sets.keywords && (mentionsKeyword(rawSrc, sets.keywords) || mentionsKeyword(rawDst, sets.keywords))) {
     return true;
@@ -370,10 +382,15 @@ function buildMatcher(combos) {
     const sets = comboClouds(c);
     if (sets) table.push({ id: c.id, ...sets });
   }
-  return (sourceCloud, destCloud) => {
+  // Lead-source combinations are checked LAST, as a fallback. If a "Manage" lead
+  // names a real source and destination, it belongs to that migration combination;
+  // only leads whose clouds match nothing (blank, "N/A", an unsupported pair like
+  // Asana -> Zoho) fall through to the product combination.
+  table.sort((a, b) => (a.leadSources ? 1 : 0) - (b.leadSources ? 1 : 0));
+  return (sourceCloud, destCloud, leadSource) => {
     const cs = canon(sourceCloud);
     const cd = canon(destCloud);
-    for (const t of table) if (comboMatches(t, cs, cd, sourceCloud, destCloud)) return t.id;
+    for (const t of table) if (comboMatches(t, cs, cd, sourceCloud, destCloud, leadSource)) return t.id;
     return null;
   };
 }
@@ -393,23 +410,39 @@ async function leadsByComboLive(combos, start, end, country) {
   const byId = {};
   for (const c of combos) byId[c.id] = { total: 0, series: zeroSeries(start, end), byDate: {} };
 
+  // Product combinations matched by lead source (SaaS Management = CF Manage) are
+  // ADDITIVE, not exclusive: a "Manage" lead that also names a real migration route
+  // is genuinely both, so it is counted under the route AND under the product.
+  // Consequence: summing leads across combinations can exceed the number of
+  // distinct contacts, by design.
+  const productCombos = combos
+    .filter((c) => Array.isArray(c.matchLeadSources))
+    .map((c) => ({ id: c.id, set: new Set(c.matchLeadSources.map((v) => String(v).toLowerCase().trim())) }));
+
   const unmatched = {}; // "source -> dest" -> count, to help you extend ALIAS/overrides
   let considered = 0;
   let matched = 0;
   for (const p of contacts) {
     if (region && contactCountryCode(p) !== region) continue; // outside selected region
     considered++;
-    const id = match(p[sourceProp], p[destProp]);
-    if (!id) {
+    const id = match(p[sourceProp], p[destProp], p.lead_source);
+    const ls = String(p.lead_source || '').toLowerCase().trim();
+    // Every product combination whose lead sources include this contact, minus the
+    // one already picked as the primary match (don't count it twice in one combo).
+    const targets = [id, ...productCombos.filter((e) => e.set.has(ls) && e.id !== id).map((e) => e.id)].filter(Boolean);
+    if (!targets.length) {
       const key = `${p[sourceProp] || '∅'} -> ${p[destProp] || '∅'}`;
       unmatched[key] = (unmatched[key] || 0) + 1;
       continue;
     }
     matched++;
-    const bucket = byId[id];
-    bucket.total++;
     const day = toEtDate(p.createdate); // US Eastern calendar day
-    if (day) bucket.byDate[day] = (bucket.byDate[day] || 0) + 1;
+    for (const target of targets) {
+      const bucket = byId[target];
+      if (!bucket) continue;
+      bucket.total++;
+      if (day) bucket.byDate[day] = (bucket.byDate[day] || 0) + 1;
+    }
   }
   // Fold per-date counts into the zero-filled series.
   for (const id of Object.keys(byId)) {
@@ -445,11 +478,22 @@ async function leadsByComboLive(combos, start, end, country) {
 //   * Pages with no declared pair (ad pages, Hyper Link Fixer, SaaS Management)
 //     get null — rendered as "—", meaning "not attributable", not "zero".
 // Returns { byUrl, attributed, unattributed, total }.
-export async function getLeadsByPage(combo, start, end, country) {
+// `allCombos` is required for correct ownership: a lead belongs to exactly ONE
+// combination (first match wins, lead-source products first), and without the
+// full list this function would happily count a lead that another combination
+// already owns — e.g. a "Manage" lead that also names Slack -> Google Chat.
+export async function getLeadsByPage(combo, start, end, country, allCombos = null) {
   const pages = combo.pages || [];
-  const mappable = pages.filter((p) => p.sourceCloud && p.destCloud);
+  // A page is attributable if it declares a cloud pair, or (for product pages that
+  // aren't a migration route) the lead sources that belong to it.
+  const hasPair = (p) => Boolean(p.sourceCloud && p.destCloud);
+  const pageLeadSources = (p) =>
+    Array.isArray(p.matchLeadSources)
+      ? new Set(p.matchLeadSources.map((v) => String(v).toLowerCase().trim()))
+      : null;
+  const mappable = pages.filter((p) => hasPair(p) || pageLeadSources(p));
   const byUrl = {};
-  for (const p of pages) byUrl[p.url] = p.sourceCloud && p.destCloud ? 0 : null;
+  for (const p of pages) byUrl[p.url] = mappable.includes(p) ? 0 : null;
 
   if (modeFor('hubspot') !== 'live') {
     // Sample mode: spread the mock combo total round-robin over mappable pages
@@ -467,13 +511,24 @@ export async function getLeadsByPage(combo, start, end, country) {
   const contacts = await getMandatoryContacts(start, end);
   const { sourceProp, destProp } = config.hubspot;
   const region = country && country !== 'ALL' ? country : null;
+  // Same bucketing the overview uses, so both views agree on who owns a lead.
+  const owner = allCombos ? buildMatcher(allCombos) : null;
 
   // Fine-grained (source, dest) -> set of page urls; >1 page means ambiguous.
   // A Set, not an array: one page may list several spellings that collapse to the
   // same fine token (e.g. "Google Drive" and "Google My Drive"), and that must
   // not make the page look like two competing candidates.
   const fine = new Map();
+  const byLeadSource = new Map(); // lead source -> set of page urls
   for (const p of mappable) {
+    const ls = pageLeadSources(p);
+    if (ls) {
+      for (const v of ls) {
+        if (!byLeadSource.has(v)) byLeadSource.set(v, new Set());
+        byLeadSource.get(v).add(p.url);
+      }
+    }
+    if (!hasPair(p)) continue;
     for (const s of [].concat(p.sourceCloud)) {
       for (const d of [].concat(p.destCloud)) {
         const k = `${canonFine(s)}|${canonFine(d)}`;
@@ -488,9 +543,19 @@ export async function getLeadsByPage(combo, start, end, country) {
   for (const p of contacts) {
     if (region && contactCountryCode(p) !== region) continue;
     // Must belong to this combination first (coarse match).
-    if (!comboMatches(sets, canon(p[sourceProp]), canon(p[destProp]), p[sourceProp], p[destProp])) continue;
+    if (!comboMatches(sets, canon(p[sourceProp]), canon(p[destProp]), p[sourceProp], p[destProp], p.lead_source))
+      continue;
+    // A product combination (matched by lead source) is additive — it keeps its own
+    // leads even when a migration combination also owns them. Everything else must
+    // be the single owner, so a lead is never counted twice among the routes.
+    const ownedByLeadSource =
+      sets.leadSources && sets.leadSources.has(String(p.lead_source || '').toLowerCase().trim());
+    if (owner && !ownedByLeadSource && owner(p[sourceProp], p[destProp], p.lead_source) !== combo.id) continue;
     total++;
-    const urls = fine.get(`${canonFine(p[sourceProp])}|${canonFine(p[destProp])}`);
+    // Lead source decides first, for product pages that aren't a migration route.
+    const urls =
+      byLeadSource.get(String(p.lead_source || '').toLowerCase().trim()) ||
+      fine.get(`${canonFine(p[sourceProp])}|${canonFine(p[destProp])}`);
     if (urls && urls.size === 1) {
       byUrl[[...urls][0]]++;
       attributed++;
