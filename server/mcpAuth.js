@@ -32,19 +32,22 @@ function sign(payload) {
   return `${body}.${sig}`;
 }
 function verify(tok, expectTyp) {
-  const [body, sig] = String(tok || '').split('.');
-  if (!body || !sig) return null;
-  const expect = crypto.createHmac('sha256', SIGN_KEY).update(body).digest('base64url');
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return null;
-  let p;
   try {
-    p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    const [body, sig] = String(tok || '').split('.');
+    if (!body || !sig) return null;
+    const expect = crypto.createHmac('sha256', SIGN_KEY).update(body).digest('base64url');
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expect);
+    // timingSafeEqual throws on length mismatch — guard so a malformed token
+    // returns null (→ 401) instead of throwing (→ 500).
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (p.typ !== expectTyp) return null;
+    if (!p.exp || Date.now() / 1000 > p.exp) return null;
+    return p;
   } catch {
-    return null;
+    return null; // any malformed token -> treated as invalid
   }
-  if (p.typ !== expectTyp) return null;
-  if (!p.exp || Date.now() / 1000 > p.exp) return null;
-  return p;
 }
 
 // --- registered clients (Dynamic Client Registration), persisted to disk -----
