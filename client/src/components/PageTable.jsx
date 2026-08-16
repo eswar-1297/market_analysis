@@ -82,15 +82,29 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
 
   useEffect(() => {
     let cancelled = false;
+    const timers = [];
     setPerf({});
-    for (const p of allPages) {
+    // Scores are measured live, which takes ~20s per page. The server answers
+    // straight away with "pending" rather than holding the request open, so we
+    // poll until the reading lands; the cell shows a spinner meanwhile and the
+    // rest of the table is already on screen.
+    const load = (url, attempt = 0) => {
       api
-        .cwv(p.url)
-        .then((d) => !cancelled && setPerf((s) => ({ ...s, [p.url]: d.performanceScore })))
-        .catch(() => !cancelled && setPerf((s) => ({ ...s, [p.url]: null })));
-    }
+        .cwv(url)
+        .then((d) => {
+          if (cancelled) return;
+          if (d.status === 'pending' && attempt < 40) {
+            timers.push(setTimeout(() => load(url, attempt + 1), 3000));
+            return;
+          }
+          setPerf((s) => ({ ...s, [url]: d.status === 'pending' ? null : d.performanceScore ?? null }));
+        })
+        .catch(() => !cancelled && setPerf((s) => ({ ...s, [url]: null })));
+    };
+    for (const p of allPages) load(p.url);
     return () => {
       cancelled = true;
+      timers.forEach(clearTimeout);
     };
   }, [allPages]);
 

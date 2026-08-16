@@ -11,7 +11,7 @@ import { mountMcp } from './mcp.js';
 import { mcpOAuthProvider, mountMcpOAuthCallback } from './mcpAuth.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { pagespeedPage, warmPagespeedCache } from './connectors/pagespeed.js';
+import { pagespeedPage, pagespeedLive } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { getOverview, withDeltas } from './services/overview.js';
 import { getLeadsByCombo, getLeadsByPage } from './connectors/hubspot.js';
@@ -495,6 +495,14 @@ app.get('/api/cwv', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'url required' });
   try {
+    // Live reading, fetched fresh per visit. Never block: if it isn't back yet we
+    // say so at once and the client polls, so the row spins while everything else
+    // on the page is already rendered.
+    if (modeFor('pagespeed') === 'live') {
+      const r = pagespeedLive(url);
+      if (r.status === 'pending') return res.json({ status: 'pending', stale: r.stale ?? null });
+      if (r.status === 'failed') return res.json({ status: 'failed', error: r.error });
+    }
     let d;
     try {
       d = await pagespeedPage(url);
@@ -510,6 +518,7 @@ app.get('/api/cwv', async (req, res) => {
       performanceScore: d.performanceScore,
       overall,
       source: d.source,
+      status: 'ready',
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -523,6 +532,19 @@ app.get('/api/combo-perf', async (req, res) => {
     const data = loadCombinations();
     const combo = data.combinations.find((c) => c.id === req.query.id);
     if (!combo) return res.status(404).json({ error: 'Combination not found' });
+    // Same live-and-non-blocking contract as /api/cwv: the combination's average
+    // only reports once every page has a live score, so the overview row spins
+    // rather than showing an average built from stale readings.
+    if (modeFor('pagespeed') === 'live') {
+      const results = combo.pages.map((pg) => pagespeedLive(pg.url));
+      if (results.some((r) => r.status === 'pending')) return res.json({ status: 'pending' });
+      const live = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
+      if (!live.length) return res.json({ perf: null, status: 'failed' });
+      return res.json({
+        perf: Math.round(live.reduce((a, r) => a + r.data.performanceScore, 0) / live.length),
+        status: 'ready',
+      });
+    }
     const scores = [];
     await Promise.all(
       combo.pages.map(async (pg) => {
@@ -599,15 +621,4 @@ app.listen(config.port, () => {
       .map(([k]) => k)
       .join(', ') || 'none (all sample data)'}\n`
   );
-  // Core Web Vitals are ~20s per page from PageSpeed, so fetch them in the
-  // background now rather than making the first visitor wait per row. Results
-  // persist to disk, so this is usually a no-op after the first run.
-  if (modeFor('pagespeed') === 'live') {
-    try {
-      const urls = loadCombinations().combinations.flatMap((c) => c.pages.map((p) => p.url));
-      warmPagespeedCache(urls);
-    } catch (e) {
-      console.warn('[pagespeed] warm-up skipped:', e.message);
-    }
-  }
 });

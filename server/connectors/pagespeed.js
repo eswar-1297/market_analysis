@@ -2,15 +2,18 @@
 // Returns a single point-in-time reading per page: LCP (ms), INP (ms),
 // CLS (score), and Lighthouse performance score.
 //
-// These calls are SLOW — ~20s each, and there are ~50 pages — so caching is the
-// whole game here:
-//   * on disk, so a deploy or `pm2 restart` doesn't throw away hours of warm
-//     entries and leave every page cold again (an in-process Map alone did);
-//   * stale-while-revalidate, so an expired entry is served instantly and
-//     refreshed in the background instead of blocking a request for 20s;
-//   * de-duplicated, so N rows asking for the same URL at once cause one call;
-//   * warmed on boot (see warmPagespeedCache), so the first visitor after a
-//     deploy doesn't pay for the cold fetch either.
+// These calls are SLOW — ~20s each, and there are ~50 pages. The Perf. column is
+// meant to be a LIVE reading, so scores are fetched fresh per visit rather than
+// served from a long-lived cache. To keep that from blocking anything:
+//   * `pagespeedLive` never waits — it kicks off the fetch and reports "pending",
+//     so the HTTP request returns instantly and the client polls. Nothing holds a
+//     connection open for 20s (which is what a reverse proxy turns into a 502).
+//   * a short FRESH_WINDOW means the rows of one page view share a single fetch,
+//     while a later visit gets a genuinely new reading.
+//   * de-duplicated per URL, and globally capped, so opening a table with 50 rows
+//     doesn't fire 50 simultaneous PageSpeed calls.
+//   * the disk cache is kept only as a FALLBACK: if a live fetch fails, the last
+//     known score is shown rather than a dash.
 
 import fs from 'fs';
 import path from 'path';
@@ -20,11 +23,14 @@ import { config } from '../config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_FILE = path.join(__dirname, '..', '..', 'data', '.cache', 'pagespeed.json');
 
-const TTL = 6 * 60 * 60 * 1000; // entries newer than this are served as-is
-const FETCH_TIMEOUT_MS = 25000; // stay under a typical 30s reverse-proxy read timeout
+const TTL = 6 * 60 * 60 * 1000; // fallback window: how long a stored score stays usable
+const FRESH_WINDOW_MS = 2 * 60 * 1000; // a reading counts as "live" for one page view
+const FETCH_TIMEOUT_MS = 25000;
+const MAX_CONCURRENT = 4; // PageSpeed is rate-limited; queue the rest
 
 const cache = new Map(); // url -> { at: ms, data }
 const inflight = new Map(); // url -> Promise, so concurrent asks share one call
+const lastError = new Map(); // url -> message from the most recent failed live fetch
 
 // --- disk persistence -------------------------------------------------------
 (function loadFromDisk() {
@@ -89,21 +95,64 @@ async function fetchFresh(url) {
   return data;
 }
 
+// --- global concurrency gate -------------------------------------------------
+let running = 0;
+const queue = [];
+function runQueued(fn) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      running++;
+      fn().then(resolve, reject).finally(() => {
+        running--;
+        const next = queue.shift();
+        if (next) next();
+      });
+    };
+    if (running < MAX_CONCURRENT) start();
+    else queue.push(start);
+  });
+}
+
 // One in-flight fetch per URL; stores and persists on success.
 function refresh(url) {
   const existing = inflight.get(url);
   if (existing) return existing;
-  const p = fetchFresh(url)
+  const p = runQueued(() => fetchFresh(url))
     .then((data) => {
       cache.set(url, { at: Date.now(), data });
       saveSoon();
       return data;
+    })
+    .catch((e) => {
+      lastError.set(url, e.message);
+      throw e;
     })
     .finally(() => inflight.delete(url));
   inflight.set(url, p);
   return p;
 }
 
+// Non-blocking live read, used by the Perf. column. Returns immediately:
+//   { status: 'ready', data }     a live reading from this page view
+//   { status: 'pending', stale }  a fetch is under way; `stale` is the last known
+//                                 score (or null) so the caller can decide
+// The caller polls until it goes 'ready'. `failed` means the live fetch errored
+// and there is no stored score to fall back on.
+export function pagespeedLive(url) {
+  const hit = cache.get(url);
+  if (hit && Date.now() - hit.at < FRESH_WINDOW_MS) return { status: 'ready', data: hit.data };
+  const p = refresh(url);
+  p.catch(() => {}); // handled by the poller; don't crash on an unhandled rejection
+  if (lastError.get(url) && !inflight.has(url)) {
+    const err = lastError.get(url);
+    lastError.delete(url);
+    if (hit && Date.now() - hit.at < TTL) return { status: 'ready', data: hit.data, stale: true };
+    return { status: 'failed', error: err };
+  }
+  return { status: 'pending', stale: hit && Date.now() - hit.at < TTL ? hit.data : null };
+}
+
+// Blocking read — still used anywhere a score is needed as part of a response.
 export async function pagespeedPage(url) {
   const hit = cache.get(url);
   if (hit && Date.now() - hit.at < TTL) return hit.data; // fresh

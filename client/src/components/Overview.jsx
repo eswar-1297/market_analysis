@@ -36,15 +36,27 @@ export default function Overview({ rows, onOpen, compare = false }) {
 
   useEffect(() => {
     let cancelled = false;
+    const timers = [];
     setPerf({});
-    for (const r of rows) {
+    // Live scores take ~20s per page, so the server replies "pending" instantly
+    // and we poll — the table is usable immediately, Perf. fills in as it lands.
+    const load = (id, attempt = 0) => {
       api
-        .comboPerf(r.id)
-        .then((d) => !cancelled && setPerf((s) => ({ ...s, [r.id]: d.perf })))
-        .catch(() => !cancelled && setPerf((s) => ({ ...s, [r.id]: null })));
-    }
+        .comboPerf(id)
+        .then((d) => {
+          if (cancelled) return;
+          if (d.status === 'pending' && attempt < 60) {
+            timers.push(setTimeout(() => load(id, attempt + 1), 4000));
+            return;
+          }
+          setPerf((s) => ({ ...s, [id]: d.status === 'pending' ? null : d.perf ?? null }));
+        })
+        .catch(() => !cancelled && setPerf((s) => ({ ...s, [id]: null })));
+    };
+    for (const r of rows) load(r.id);
     return () => {
       cancelled = true;
+      timers.forEach(clearTimeout);
     };
   }, [rows]);
 
