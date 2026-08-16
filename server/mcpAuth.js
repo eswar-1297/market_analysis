@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { config } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -172,10 +173,12 @@ export const mcpOAuthProvider = {
     };
   },
 
-  // Validate the Bearer token on every /mcp request (stateless).
+  // Validate the Bearer token on every /mcp request (stateless). Throw
+  // InvalidTokenError (not a generic Error) so the middleware returns 401 —
+  // which prompts the client to refresh — rather than a 500 that breaks it.
   async verifyAccessToken(token) {
     const p = verify(token, 'access');
-    if (!p) throw new Error('Invalid or expired token.');
+    if (!p) throw new InvalidTokenError('Invalid or expired access token.');
     return { token, clientId: p.cid, scopes: ['read'], expiresAt: p.exp, extra: { email: p.sub } };
   },
 };
