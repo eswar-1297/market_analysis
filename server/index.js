@@ -563,7 +563,16 @@ app.get('/api/combo-perf', async (req, res) => {
       const results = combo.pages.map((pg) => pagespeedSnapshot(pg.url, { force }));
       if (results.some((r) => r.status === 'pending')) return res.json({ status: 'pending' });
       const ready = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
-      if (!ready.length) return res.json({ perf: null, status: 'failed' });
+      // Nothing measurable in the whole combination. Say WHY — the client shows a
+      // failure differently from a page still being measured, and an unexplained
+      // dash is the thing that made those two indistinguishable.
+      if (!ready.length) {
+        return res.json({
+          perf: null,
+          status: 'failed',
+          error: results.find((r) => r.error)?.error || 'PageSpeed returned no score for these pages',
+        });
+      }
       return res.json({
         perf: Math.round(ready.reduce((a, r) => a + r.data.performanceScore, 0) / ready.length),
         measuredAt: Math.max(...ready.map((r) => r.at ?? 0)) || null,

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import ColumnFilter from './ColumnFilter.jsx';
 import PerfRefresh from './PerfRefresh.jsx';
+import PerfCell from './PerfCell.jsx';
+import { pollDelay } from '../perfPoll.js';
 import { makeRanges, fmtRound, inRange, nextSort, sortRows } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
@@ -37,6 +39,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
   const [perf, setPerf] = useState({}); // id -> score | null; undefined = loading
   const [perfAt, setPerfAt] = useState({}); // id -> when that score was measured
   const [perfStale, setPerfStale] = useState({}); // id -> re-measure failed, showing the old score
+  const [perfError, setPerfError] = useState({}); // id -> why there is no score at all
   const [strategy, setStrategy] = useState(null); // 'desktop' | 'mobile', per the server
   // Shared cancel/timer bag for the in-flight polls, so a date/region change stops
   // them — including polls a row's own refresh button started.
@@ -49,24 +52,41 @@ export default function Overview({ rows, onOpen, compare = false }) {
   // holding the request open, so we poll and that one cell spins.
   // `force` re-measures that combination's pages — a row's own button calls it for
   // one row, the header button for every row. Only the FIRST request forces; a poll
-  // that kept asking would restart the measurement every 4s and never settle.
+  // that kept asking would restart the measurement every few seconds and never
+  // settle.
   const loadPerf = useCallback((id, { force = false } = {}) => {
     setPerf((s) => ({ ...s, [id]: undefined }));
+    setPerfError((e) => ({ ...e, [id]: null }));
     const step = (attempt) => {
       api
         .comboPerf(id, force && attempt === 0)
         .then((d) => {
           if (live.current.cancelled) return;
-          if (d.status === 'pending' && attempt < 150) {
-            live.current.timers.push(setTimeout(() => step(attempt + 1), 4000));
+          // Keep asking for as long as the server says it is still measuring.
+          // There is deliberately no attempt limit: a cold snapshot (the first
+          // boot after a deploy) measures every page at ~20s each and outlasts
+          // any fixed count, and giving up wrote a "—" indistinguishable from a
+          // real failure. "pending" is self-limiting — a measurement that fails
+          // comes back as 'failed', not as pending forever — and the poll eases
+          // off via pollDelay, so waiting costs little.
+          if (d.status === 'pending') {
+            live.current.timers.push(setTimeout(() => step(attempt + 1), pollDelay(attempt, 4000)));
             return;
           }
           if (d.strategy) setStrategy(d.strategy);
           setPerfAt((t) => ({ ...t, [id]: d.measuredAt ?? null }));
           setPerfStale((f) => ({ ...f, [id]: d.stale ? d.staleReason || true : false }));
-          setPerf((s) => ({ ...s, [id]: d.status === 'pending' ? null : d.perf ?? null }));
+          setPerfError((e) => ({
+            ...e,
+            [id]: d.status === 'failed' ? d.error || 'PageSpeed returned no score' : null,
+          }));
+          setPerf((s) => ({ ...s, [id]: d.perf ?? null }));
         })
-        .catch(() => !live.current.cancelled && setPerf((s) => ({ ...s, [id]: null })));
+        .catch((err) => {
+          if (live.current.cancelled) return;
+          setPerfError((e) => ({ ...e, [id]: err.message || 'request failed' }));
+          setPerf((s) => ({ ...s, [id]: null }));
+        });
     };
     step(0);
   }, []);
@@ -77,6 +97,7 @@ export default function Overview({ rows, onOpen, compare = false }) {
     setPerf({});
     setPerfAt({});
     setPerfStale({});
+    setPerfError({});
     for (const r of rows) loadPerf(r.id);
     return () => {
       bag.cancelled = true;
@@ -226,23 +247,18 @@ export default function Overview({ rows, onOpen, compare = false }) {
                       shouldn't re-measure every other combination's pages too. */}
                   <td>
                     <span className="perf-cell">
-                      {perf[r.id] === undefined ? (
-                        <span className="spinner" />
-                      ) : (
-                        <>
-                          {perf[r.id] != null ? (
-                            <span className={perf[r.id] < 97 ? 'perf-low' : ''}>{perf[r.id]}</span>
-                          ) : (
-                            '—'
-                          )}
-                          <PerfRefresh
-                            measuredAt={perfAt[r.id]}
-                            strategy={strategy}
-                            scope="this combination"
-                            stale={perfStale[r.id]}
-                            onClick={() => loadPerf(r.id, { force: true })}
-                          />
-                        </>
+                      <PerfCell score={perf[r.id]} error={perfError[r.id]} />
+                      {/* No button while a measurement is running — the spinner
+                          already says so, and clicking would only restart what is
+                          already under way. */}
+                      {perf[r.id] !== undefined && (
+                        <PerfRefresh
+                          measuredAt={perfAt[r.id]}
+                          strategy={strategy}
+                          scope="this combination"
+                          stale={perfStale[r.id]}
+                          onClick={() => loadPerf(r.id, { force: true })}
+                        />
                       )}
                     </span>
                   </td>

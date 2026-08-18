@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import ColumnFilter from './ColumnFilter.jsx';
 import PerfRefresh from './PerfRefresh.jsx';
+import PerfCell from './PerfCell.jsx';
+import { pollDelay } from '../perfPoll.js';
 import { makeRanges, fmtRound, inRange, nextSort, sortRows } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
@@ -82,6 +84,7 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
   const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
   const [perfAt, setPerfAt] = useState({}); // url -> when that score was measured
   const [perfStale, setPerfStale] = useState({}); // url -> re-measure failed, showing the old score
+  const [perfError, setPerfError] = useState({}); // url -> why there is no score at all
   const [strategy, setStrategy] = useState(null); // 'desktop' | 'mobile', per the server
   // Shared cancel/timer bag for the in-flight polls, so unmounting or switching
   // combination stops them — including polls a row's own refresh button started.
@@ -98,21 +101,34 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
   // measurement every 3s and never settle.
   const loadPerf = useCallback((url, { force = false } = {}) => {
     setPerf((s) => ({ ...s, [url]: undefined }));
+    setPerfError((e) => ({ ...e, [url]: null }));
     const step = (attempt) => {
       api
         .cwv(url, force && attempt === 0)
         .then((d) => {
           if (live.current.cancelled) return;
-          if (d.status === 'pending' && attempt < 100) {
-            live.current.timers.push(setTimeout(() => step(attempt + 1), 3000));
+          // No attempt limit, deliberately — see the same loop in Overview.jsx:
+          // a cold snapshot outlasts any fixed count, and giving up wrote a "—"
+          // that read as a failure. The server ends a pending state itself, and
+          // pollDelay eases the interval off while we wait.
+          if (d.status === 'pending') {
+            live.current.timers.push(setTimeout(() => step(attempt + 1), pollDelay(attempt)));
             return;
           }
           if (d.strategy) setStrategy(d.strategy);
           setPerfAt((t) => ({ ...t, [url]: d.measuredAt ?? null }));
           setPerfStale((f) => ({ ...f, [url]: d.stale ? d.staleReason || true : false }));
-          setPerf((s) => ({ ...s, [url]: d.status === 'pending' ? null : d.performanceScore ?? null }));
+          setPerfError((e) => ({
+            ...e,
+            [url]: d.status === 'failed' ? d.error || 'PageSpeed returned no score' : null,
+          }));
+          setPerf((s) => ({ ...s, [url]: d.performanceScore ?? null }));
         })
-        .catch(() => !live.current.cancelled && setPerf((s) => ({ ...s, [url]: null })));
+        .catch((err) => {
+          if (live.current.cancelled) return;
+          setPerfError((e) => ({ ...e, [url]: err.message || 'request failed' }));
+          setPerf((s) => ({ ...s, [url]: null }));
+        });
     };
     step(0);
   }, []);
@@ -123,6 +139,7 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
     setPerf({});
     setPerfAt({});
     setPerfStale({});
+    setPerfError({});
     for (const p of allPages) loadPerf(p.url);
     return () => {
       bag.cancelled = true;
@@ -190,20 +207,21 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
   const ppcPages = pages.filter((p) => p.ppc);
   const hasBoth = organicPages.length > 0 && ppcPages.length > 0;
 
-  // Render a performance score, colored red when below 97 (needs attention).
-  const renderPerf = (score) => {
-    if (score === undefined) return <span className="spinner" />;
-    if (score == null) return '—';
-    return <span className={score < 97 ? 'perf-low' : ''}>{score}</span>;
-  };
+  // Render one page's score. `error` distinguishes a page PageSpeed could not
+  // measure from one that is merely still being measured — both are a dash
+  // otherwise.
+  const renderPerf = (score, error) => <PerfCell score={score} error={error} />;
 
   // Average performance score across a set of pages (lazy — spinner until at
   // least one page's score has loaded).
   const groupPerf = (rows) => {
     const sc = rows.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
     const anyLoaded = rows.some((p) => perf[p.url] !== undefined);
-    if (!anyLoaded) return <span className="spinner" />;
-    return renderPerf(sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : null);
+    if (!anyLoaded) return renderPerf(undefined);
+    if (sc.length) return renderPerf(Math.round(sc.reduce((a, b) => a + b, 0) / sc.length));
+    // Every page in the group resolved without a score — surface one of the
+    // reasons rather than an unexplained dash on the summary row.
+    return renderPerf(null, rows.map((p) => perfError[p.url]).find(Boolean));
   };
 
   const renderRow = (p, cls = '') => {
@@ -239,7 +257,7 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
           display={p.bounceRate != null ? Math.round(p.bounceRate * 100) + '%' : '—'}
           compare={compare}
         />
-        <td>{renderPerf(score)}</td>
+        <td>{renderPerf(score, perfError[p.url])}</td>
       </tr>
     );
   };

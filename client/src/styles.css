@@ -468,6 +468,14 @@ tbody tr:not(.group-total):not(.total-row) .lead-cell .cell-val { font-weight: 6
 .chip-delta.down { color: var(--bad); }
 .chip-delta.flat { color: var(--muted); }
 .perf-low { color: var(--bad); font-weight: 700; }
+/* A page PageSpeed could not measure. Marked so it doesn't read as "no data" —
+   the dash is the same either way, so the cue and the reason (in the tooltip)
+   are what separate a failure from a page still being measured. */
+.perf-failed {
+  color: var(--bad);
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
+}
 
 /* Per-column range filters — the control sits in the header beside the field
    name, so no separate filter row is needed. */
