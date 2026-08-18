@@ -11,7 +11,12 @@ import { mountMcp } from './mcp.js';
 import { mcpOAuthProvider, mountMcpOAuthCallback } from './mcpAuth.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { pagespeedPage, pagespeedLive } from './connectors/pagespeed.js';
+import {
+  pagespeedPage,
+  pagespeedSnapshot,
+  pagespeedSnapshotInfo,
+  schedulePagespeedRefresh,
+} from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { getOverview, withDeltas } from './services/overview.js';
 import { getLeadsByCombo, getLeadsByPage } from './connectors/hubspot.js';
@@ -236,6 +241,8 @@ app.get('/api/meta', (req, res) => {
     defaultRange: defaultRange(),
     regions: REGIONS,
     defaultCountry: DEFAULT_COUNTRY,
+    // Perf. scores are pre-measured daily, so the UI can say how current they are.
+    perfSnapshot: { ...pagespeedSnapshotInfo(), refreshHour: config.pagespeedRefreshHour },
   });
 });
 
@@ -483,25 +490,50 @@ app.get('/api/author', async (req, res) => {
   }
 });
 
-// Lazy Core Web Vitals for a single page (loaded per-row by the UI so the
-// slow PageSpeed call never blocks the main view). Cached 6h in the connector.
+// Core Web Vitals for a single page, served from the daily pre-measured snapshot
+// (see connectors/pagespeed.js). `?refresh=1` forces a fresh measurement — that's
+// the Perf. refresh button in the table header.
 function cwvStatus(metric, value) {
   const t = { lcp: [2500, 4000], inp: [200, 500], cls: [0.1, 0.25] }[metric];
   if (value <= t[0]) return 'good';
   if (value <= t[1]) return 'needs-improvement';
   return 'poor';
 }
+function cwvPayload(d) {
+  const statuses = [cwvStatus('lcp', d.lcp), cwvStatus('inp', d.inp), cwvStatus('cls', d.cls)];
+  return {
+    lcp: { value: d.lcp, status: statuses[0] },
+    inp: { value: d.inp, status: statuses[1] },
+    cls: { value: d.cls, status: statuses[2] },
+    performanceScore: d.performanceScore,
+    overall: statuses.includes('poor') ? 'poor' : statuses.includes('needs-improvement') ? 'needs-improvement' : 'good',
+    source: d.source,
+    // Which PageSpeed profile this score is from, so the UI can say so and the
+    // number can be lined up against the matching tab on pagespeed.web.dev.
+    strategy: config.pagespeedStrategy,
+    status: 'ready',
+  };
+}
 app.get('/api/cwv', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'url required' });
   try {
-    // Live reading, fetched fresh per visit. Never block: if it isn't back yet we
-    // say so at once and the client polls, so the row spins while everything else
-    // on the page is already rendered.
+    // Snapshot read — normally instant. Never block: if a measurement is running
+    // we say so at once and the client polls, so the row spins while everything
+    // else on the page is already rendered.
     if (modeFor('pagespeed') === 'live') {
-      const r = pagespeedLive(url);
-      if (r.status === 'pending') return res.json({ status: 'pending', stale: r.stale ?? null });
+      const r = pagespeedSnapshot(url, { force: req.query.refresh === '1' });
+      if (r.status === 'pending') return res.json({ status: 'pending', previous: r.previous ?? null });
       if (r.status === 'failed') return res.json({ status: 'failed', error: r.error });
+      // `stale` = the measurement failed and this is the previous reading, so the
+      // UI can say the re-measure didn't take instead of showing an unchanged
+      // number that looks like a no-op click.
+      return res.json({
+        ...cwvPayload(r.data),
+        measuredAt: r.at ?? null,
+        stale: r.stale ?? false,
+        staleReason: r.staleReason ?? null,
+      });
     }
     let d;
     try {
@@ -509,39 +541,36 @@ app.get('/api/cwv', async (req, res) => {
     } catch {
       d = mockPage(url, '2020-01-01', '2020-01-28').pagespeed;
     }
-    const statuses = [cwvStatus('lcp', d.lcp), cwvStatus('inp', d.inp), cwvStatus('cls', d.cls)];
-    const overall = statuses.includes('poor') ? 'poor' : statuses.includes('needs-improvement') ? 'needs-improvement' : 'good';
-    res.json({
-      lcp: { value: d.lcp, status: cwvStatus('lcp', d.lcp) },
-      inp: { value: d.inp, status: cwvStatus('inp', d.inp) },
-      cls: { value: d.cls, status: cwvStatus('cls', d.cls) },
-      performanceScore: d.performanceScore,
-      overall,
-      source: d.source,
-      status: 'ready',
-    });
+    res.json(cwvPayload(d));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // Average performance score for a combination (avg of its pages' PageSpeed
-// scores). Lazy per-row on the overview; cached 6h in the connector.
+// scores), from the same daily snapshot. `?refresh=1` re-measures every page in
+// the combination.
 app.get('/api/combo-perf', async (req, res) => {
   try {
     const data = loadCombinations();
     const combo = data.combinations.find((c) => c.id === req.query.id);
     if (!combo) return res.status(404).json({ error: 'Combination not found' });
-    // Same live-and-non-blocking contract as /api/cwv: the combination's average
-    // only reports once every page has a live score, so the overview row spins
-    // rather than showing an average built from stale readings.
+    // Same non-blocking contract as /api/cwv: the average only reports once every
+    // page has a score, so the overview row spins rather than showing an average
+    // built from a partial set.
     if (modeFor('pagespeed') === 'live') {
-      const results = combo.pages.map((pg) => pagespeedLive(pg.url));
+      const force = req.query.refresh === '1';
+      const results = combo.pages.map((pg) => pagespeedSnapshot(pg.url, { force }));
       if (results.some((r) => r.status === 'pending')) return res.json({ status: 'pending' });
-      const live = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
-      if (!live.length) return res.json({ perf: null, status: 'failed' });
+      const ready = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
+      if (!ready.length) return res.json({ perf: null, status: 'failed' });
       return res.json({
-        perf: Math.round(live.reduce((a, r) => a + r.data.performanceScore, 0) / live.length),
+        perf: Math.round(ready.reduce((a, r) => a + r.data.performanceScore, 0) / ready.length),
+        measuredAt: Math.max(...ready.map((r) => r.at ?? 0)) || null,
+        strategy: config.pagespeedStrategy,
+        // True when at least one page fell back to its previous reading.
+        stale: ready.some((r) => r.stale),
+        staleReason: ready.find((r) => r.staleReason)?.staleReason ?? null,
         status: 'ready',
       });
     }
@@ -611,6 +640,17 @@ if (fs.existsSync(dist)) {
   });
 }
 
+// Every page URL across all combinations — read fresh each run so pages added to
+// combinations.json are picked up without a restart.
+function allPageUrls() {
+  try {
+    return loadCombinations().combinations.flatMap((c) => c.pages.map((pg) => pg.url));
+  } catch (e) {
+    console.warn('[pagespeed] could not read combinations for the daily refresh:', e.message);
+    return [];
+  }
+}
+
 app.listen(config.port, () => {
   console.log(`\n  CloudFuze Marketing Dashboard API`);
   console.log(`  http://localhost:${config.port}`);
@@ -621,4 +661,7 @@ app.listen(config.port, () => {
       .map(([k]) => k)
       .join(', ') || 'none (all sample data)'}\n`
   );
+  // Pre-measure Perf. scores daily so the column loads from a stored snapshot
+  // instead of running ~50 live PageSpeed calls per visit.
+  if (modeFor('pagespeed') === 'live') schedulePagespeedRefresh(allPageUrls, config.pagespeedRefreshHour);
 });

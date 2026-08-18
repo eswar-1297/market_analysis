@@ -13,6 +13,17 @@ export const config = {
   googleCredentialsB64: (process.env.GOOGLE_CREDENTIALS_B64 || process.env.GOOGLE_CREDENTIALS_JSON || '').trim(),
   scSiteUrl: (process.env.SEARCH_CONSOLE_SITE_URL || '').trim(),
   pagespeedApiKey: (process.env.PAGESPEED_API_KEY || '').trim(),
+  // Which PageSpeed profile to measure: 'desktop' (default) or 'mobile'. This must
+  // match the tab you compare against on pagespeed.web.dev — the two profiles are
+  // separate measurements and their scores are not comparable.
+  pagespeedStrategy: (process.env.PAGESPEED_STRATEGY || 'desktop').trim().toLowerCase() === 'mobile' ? 'mobile' : 'desktop',
+  // Hour (local, 0-23) of the daily PageSpeed pre-measure. Every page's score is
+  // refreshed once here so the Perf. column serves a stored snapshot instantly
+  // instead of firing ~50 live 20s calls whenever someone opens the dashboard.
+  pagespeedRefreshHour: (() => {
+    const h = Number(process.env.PAGESPEED_REFRESH_HOUR);
+    return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 7;
+  })(),
   // Server secret used to sign the app session token + OAuth state. Not a
   // user-facing login anymore (that's Microsoft) — just an internal HMAC key.
   authUser: process.env.DASHBOARD_USER || 'CFMARKETING',

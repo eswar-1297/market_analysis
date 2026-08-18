@@ -2,18 +2,22 @@
 // Returns a single point-in-time reading per page: LCP (ms), INP (ms),
 // CLS (score), and Lighthouse performance score.
 //
-// These calls are SLOW — ~20s each, and there are ~50 pages. The Perf. column is
-// meant to be a LIVE reading, so scores are fetched fresh per visit rather than
-// served from a long-lived cache. To keep that from blocking anything:
-//   * `pagespeedLive` never waits — it kicks off the fetch and reports "pending",
-//     so the HTTP request returns instantly and the client polls. Nothing holds a
-//     connection open for 20s (which is what a reverse proxy turns into a 502).
-//   * a short FRESH_WINDOW means the rows of one page view share a single fetch,
-//     while a later visit gets a genuinely new reading.
-//   * de-duplicated per URL, and globally capped, so opening a table with 50 rows
-//     doesn't fire 50 simultaneous PageSpeed calls.
-//   * the disk cache is kept only as a FALLBACK: if a live fetch fails, the last
-//     known score is shown rather than a dash.
+// These calls are SLOW — ~20s each, and there are ~50 pages. Measuring on demand
+// meant every visit re-ran the lot, so the Perf. column sat spinning for minutes.
+// Instead scores are PRE-MEASURED once a day (07:00 local by default) and served
+// from that snapshot:
+//   * `schedulePagespeedRefresh` re-measures every page at the daily hour, and
+//     also on boot when the stored snapshot predates the last scheduled run (cold
+//     start, or the server was down at 07:00).
+//   * `pagespeedSnapshot` answers instantly from the snapshot. It only fetches
+//     when a page has no usable score at all, or when the user explicitly asks
+//     for a re-measure (`{ force: true }` — the Perf. refresh button).
+//   * it never waits: a fetch in progress reports "pending" with the previous
+//     score attached, so the client keeps showing a number and polls for the new
+//     one. Nothing holds a connection open for 20s (a reverse proxy turns that
+//     into a 502).
+//   * de-duplicated per URL, and globally capped, so a 50-row table can't fire 50
+//     simultaneous PageSpeed calls.
 
 import fs from 'fs';
 import path from 'path';
@@ -23,23 +27,46 @@ import { config } from '../config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_FILE = path.join(__dirname, '..', '..', 'data', '.cache', 'pagespeed.json');
 
-const TTL = 6 * 60 * 60 * 1000; // fallback window: how long a stored score stays usable
-const FRESH_WINDOW_MS = 2 * 60 * 1000; // a reading counts as "live" for one page view
+// How long a stored score stays servable. Comfortably longer than a day so a
+// missed 07:00 run shows yesterday's numbers instead of blanking the column.
+const SNAPSHOT_TTL = 36 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 25000;
+// Desktop or mobile. PageSpeed treats these as two separate measurements, so a
+// stored score is only comparable to others taken with the SAME profile — hence
+// it's recorded alongside every reading and checked on load.
+const STRATEGY = config.pagespeedStrategy;
 const MAX_CONCURRENT = 4; // PageSpeed is rate-limited; queue the rest
+// After a failed measurement, don't try that page again for a while. Without this
+// a URL PageSpeed refuses gets re-fetched on every 3s poll, which is both useless
+// and the fastest way to get rate-limited.
+const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 
-const cache = new Map(); // url -> { at: ms, data }
+const cache = new Map(); // url -> { at: ms, data, strategy }
 const inflight = new Map(); // url -> Promise, so concurrent asks share one call
-const lastError = new Map(); // url -> message from the most recent failed live fetch
+// url -> { at, message } for the most recent failed fetch, cleared by a success.
+// Kept (rather than consumed on read) so a reading can be reported as stale for as
+// long as the newest attempt to replace it is a failure.
+const lastError = new Map();
+const forced = new Set(); // urls the user asked to re-measure, until it lands
 
 // --- disk persistence -------------------------------------------------------
 (function loadFromDisk() {
   try {
     const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    let dropped = 0;
     for (const [url, entry] of Object.entries(raw)) {
-      if (entry && typeof entry.at === 'number' && entry.data) cache.set(url, entry);
+      if (!entry || typeof entry.at !== 'number' || !entry.data) continue;
+      // A score measured under the other profile is not a stale version of this
+      // one — it's a different number. Discard it so the page is re-measured
+      // instead of the column mixing desktop and mobile readings.
+      if (entry.strategy !== STRATEGY) {
+        dropped++;
+        continue;
+      }
+      cache.set(url, entry);
     }
-    if (cache.size) console.log(`[pagespeed] loaded ${cache.size} cached page score(s) from disk`);
+    if (cache.size) console.log(`[pagespeed] loaded ${cache.size} cached ${STRATEGY} score(s) from disk`);
+    if (dropped) console.log(`[pagespeed] discarded ${dropped} score(s) from a different profile — will re-measure for ${STRATEGY}`);
   } catch {
     /* no cache yet (or unreadable) — start empty */
   }
@@ -69,7 +96,7 @@ async function fetchFresh(url) {
   const api = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
   api.searchParams.set('url', url);
   api.searchParams.set('category', 'performance');
-  api.searchParams.set('strategy', 'mobile');
+  api.searchParams.set('strategy', STRATEGY);
   if (config.pagespeedApiKey) api.searchParams.set('key', config.pagespeedApiKey);
 
   const res = await fetch(api, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -119,12 +146,13 @@ function refresh(url) {
   if (existing) return existing;
   const p = runQueued(() => fetchFresh(url))
     .then((data) => {
-      cache.set(url, { at: Date.now(), data });
+      cache.set(url, { at: Date.now(), data, strategy: STRATEGY });
+      lastError.delete(url); // a good reading supersedes any earlier failure
       saveSoon();
       return data;
     })
     .catch((e) => {
-      lastError.set(url, e.message);
+      lastError.set(url, { at: Date.now(), message: e.message });
       throw e;
     })
     .finally(() => inflight.delete(url));
@@ -132,60 +160,159 @@ function refresh(url) {
   return p;
 }
 
-// Non-blocking live read, used by the Perf. column. Returns immediately:
-//   { status: 'ready', data }     a live reading from this page view
-//   { status: 'pending', stale }  a fetch is under way; `stale` is the last known
-//                                 score (or null) so the caller can decide
-// The caller polls until it goes 'ready'. `failed` means the live fetch errored
-// and there is no stored score to fall back on.
-export function pagespeedLive(url) {
+// Non-blocking read, used by the Perf. column. Returns immediately:
+//   { status: 'ready', data, at }  the daily snapshot (`at` = when it was measured)
+//   { status: 'pending', previous } a measurement is under way; `previous` is the
+//                                  last score (or null) to keep showing meanwhile
+//   { status: 'failed', error }    the fetch errored and nothing is stored
+// The caller polls while it is 'pending'. Pass `{ force: true }` for the Perf.
+// refresh button: it re-measures even when the snapshot is current, and keeps
+// reporting 'pending' until the NEW reading lands — otherwise the very next poll
+// would hand back the old score as ready and the refresh would look instant but
+// change nothing.
+export function pagespeedSnapshot(url, { force = false } = {}) {
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < FRESH_WINDOW_MS) return { status: 'ready', data: hit.data };
+  const err = lastError.get(url);
+
+  if (force && !forced.has(url)) {
+    forced.add(url);
+    refresh(url)
+      .catch(() => {})
+      .finally(() => forced.delete(url));
+  }
+  if (forced.has(url)) return { status: 'pending', previous: hit?.data ?? null, at: hit?.at ?? null };
+
+  if (hit && Date.now() - hit.at < SNAPSHOT_TTL) {
+    // A failure recorded AFTER this reading means we tried to replace it and
+    // couldn't. Flag it: an unchanged number with no explanation reads as a
+    // refresh click that did nothing.
+    const failedSince = Boolean(err && err.at > hit.at);
+    return {
+      status: 'ready',
+      data: hit.data,
+      at: hit.at,
+      stale: failedSince,
+      staleReason: failedSince ? err.message : null,
+    };
+  }
+
+  // Nothing usable stored (a page added since the last daily run, or a cold cache).
+  // Report a recent failure instead of starting yet another fetch — checking this
+  // BEFORE refreshing is what stops a failing URL being re-fetched on every poll.
+  if (err && !inflight.has(url) && Date.now() - err.at < FAILURE_COOLDOWN_MS) {
+    if (hit) return { status: 'ready', data: hit.data, at: hit.at, stale: true };
+    return { status: 'failed', error: err.message };
+  }
+
   const p = refresh(url);
   p.catch(() => {}); // handled by the poller; don't crash on an unhandled rejection
-  if (lastError.get(url) && !inflight.has(url)) {
-    const err = lastError.get(url);
-    lastError.delete(url);
-    if (hit && Date.now() - hit.at < TTL) return { status: 'ready', data: hit.data, stale: true };
-    return { status: 'failed', error: err };
-  }
-  return { status: 'pending', stale: hit && Date.now() - hit.at < TTL ? hit.data : null };
+  return { status: 'pending', previous: hit?.data ?? null, at: hit?.at ?? null };
 }
 
 // Blocking read — still used anywhere a score is needed as part of a response.
 export async function pagespeedPage(url) {
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < TTL) return hit.data; // fresh
+  if (hit && Date.now() - hit.at < SNAPSHOT_TTL) return hit.data; // snapshot is current
   if (hit) {
-    // Stale: hand back the previous reading immediately and refresh behind the
-    // scenes — nobody should wait 20s for a number that barely moves. A failed
-    // background refresh just keeps the stale value.
+    // Older than the snapshot window: hand back the previous reading immediately
+    // and refresh behind the scenes — nobody should wait 20s for a number that
+    // barely moves. A failed background refresh just keeps the stale value.
     refresh(url).catch(() => {});
     return hit.data;
   }
   return refresh(url); // cold — nothing to serve but the live call
 }
 
-// Populate the cache in the background at low concurrency. Called on boot so the
-// slow first fetch happens before anyone opens a combination, not during it.
-export function warmPagespeedCache(urls, concurrency = 3) {
+// When the most recent scheduled run was (today's if it has passed, else
+// yesterday's). Anything measured before this is due for a refresh.
+function lastScheduledRun(hour) {
+  const at = new Date();
+  at.setHours(hour, 0, 0, 0);
+  if (at.getTime() > Date.now()) at.setDate(at.getDate() - 1);
+  return at.getTime();
+}
+
+// Newest measurement in the snapshot, so /api/meta can report how current the
+// Perf. column is.
+export function pagespeedSnapshotInfo() {
+  let newest = null;
+  for (const entry of cache.values()) if (!newest || entry.at > newest) newest = entry.at;
+  return { pages: cache.size, measuredAt: newest, strategy: STRATEGY };
+}
+
+// Pre-measure every page once a day at `hour` local time. `getUrls` is called at
+// run time, not now, so pages added to combinations.json later are picked up
+// without a restart.
+export function schedulePagespeedRefresh(getUrls, hour) {
+  const msUntilRun = () => {
+    const next = new Date();
+    next.setHours(hour, 0, 0, 0);
+    if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+    return next.getTime() - Date.now();
+  };
+
+  const run = () => {
+    console.log(`[pagespeed] daily ${String(hour).padStart(2, '0')}:00 refresh starting`);
+    warmPagespeedCache(getUrls(), { staleBefore: Date.now() });
+    // Re-arm from the clock rather than on a fixed 24h interval, so a DST shift
+    // can't drift the run an hour off.
+    setTimeout(run, msUntilRun()).unref?.();
+  };
+
+  const wait = msUntilRun();
+  setTimeout(run, wait).unref?.();
+  console.log(
+    `[pagespeed] daily ${STRATEGY} refresh scheduled for ${String(hour).padStart(2, '0')}:00 ` +
+      `(in ${Math.round(wait / 60000)} min)`
+  );
+
+  // Cold start, or the server was down at the scheduled hour: bring the snapshot
+  // up to date now, at low concurrency, so the first visitor isn't the one paying
+  // for the measurement.
+  warmPagespeedCache(getUrls(), { concurrency: 2, staleBefore: lastScheduledRun(hour) });
+}
+
+// Populate the snapshot in the background at low concurrency. `staleBefore` is
+// the cutoff: any page measured before it gets re-measured (pass Date.now() to
+// refresh everything, or the last scheduled run to only fill in what's missing).
+export function warmPagespeedCache(urls, { concurrency = 3, staleBefore = null } = {}) {
+  const cutoff = staleBefore ?? Date.now() - SNAPSHOT_TTL;
   const todo = [...new Set(urls)].filter((u) => {
     const hit = cache.get(u);
-    return !hit || Date.now() - hit.at >= TTL;
+    return !hit || hit.at < cutoff;
   });
   if (!todo.length) return;
   console.log(`[pagespeed] warming ${todo.length} page(s) in the background…`);
+  runWarm(todo, concurrency, true);
+}
+
+// Measure a list of pages, `concurrency` at a time. PageSpeed fails a page often
+// enough to matter (rate limits, a slow render), so failures are collected and
+// retried once — without that, a page that merely blipped shows "—" until the next
+// daily run.
+function runWarm(list, concurrency, allowRetry) {
+  const failed = [];
   let i = 0;
   let done = 0;
   const next = () => {
-    if (i >= todo.length) return Promise.resolve();
-    const url = todo[i++];
+    if (i >= list.length) return Promise.resolve();
+    const url = list[i++];
     return refresh(url)
-      .catch(() => {}) // one bad page must not stop the warm-up
+      .catch(() => failed.push(url)) // one bad page must not stop the warm-up
       .then(() => {
-        if (++done === todo.length) console.log('[pagespeed] warm-up complete');
+        if (++done === list.length) {
+          if (failed.length && allowRetry) {
+            console.log(`[pagespeed] retrying ${failed.length} page(s) that failed`);
+            runWarm(failed, concurrency, false);
+          } else {
+            console.log(
+              `[pagespeed] warm-up complete` +
+                (failed.length ? ` — ${failed.length} page(s) still failing, will retry at the next run` : '')
+            );
+          }
+        }
         return next();
       });
   };
-  for (let w = 0; w < Math.min(concurrency, todo.length); w++) next();
+  for (let w = 0; w < Math.min(concurrency, list.length); w++) next();
 }

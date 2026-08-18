@@ -37,3 +37,32 @@ export function inRange(v, rng) {
   if (typeof v !== 'number' || Number.isNaN(v)) return true; // keep rows with no value
   return v >= rng.lo && (rng.hi === Infinity ? true : v < rng.hi);
 }
+
+// ---------- Sorting ----------
+
+// Clicking a column header cycles its sort: unsorted -> ascending (lowest
+// first) -> descending -> back to the data's natural order.
+export function nextSort(cur, key) {
+  if (cur?.key !== key) return { key, dir: 'asc' };
+  if (cur.dir === 'asc') return { key, dir: 'desc' };
+  return null;
+}
+
+// Sort rows by a column's accessor. Rows with no value for that column sink to
+// the bottom in BOTH directions — a page whose score hasn't loaded yet must not
+// masquerade as the smallest number.
+export function sortRows(rows, sort, cols) {
+  const col = sort && cols.find((c) => c.key === sort.key);
+  if (!col) return rows;
+  const missing = (v) => v == null || v === '' || (typeof v === 'number' && Number.isNaN(v));
+  const sign = sort.dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = col.get(a);
+    const y = col.get(b);
+    if (missing(x) || missing(y)) return missing(x) && missing(y) ? 0 : missing(x) ? 1 : -1;
+    if (typeof x === 'string' || typeof y === 'string') {
+      return sign * String(x).localeCompare(String(y), undefined, { numeric: true });
+    }
+    return sign * (x - y);
+  });
+}

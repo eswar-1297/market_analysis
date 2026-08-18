@@ -64,8 +64,12 @@ export const api = {
     const qs = q.toString();
     return get(`/api/combinations/${id}${qs ? '?' + qs : ''}`);
   },
-  cwv: (url) => get(`/api/cwv?url=${encodeURIComponent(url)}`),
-  comboPerf: (id) => get(`/api/combo-perf?id=${encodeURIComponent(id)}`),
+  // `refresh` forces a fresh PageSpeed measurement instead of reading the daily
+  // pre-measured snapshot (the Perf. column's refresh button).
+  cwv: (url, refresh = false) =>
+    get(`/api/cwv?url=${encodeURIComponent(url)}${refresh ? '&refresh=1' : ''}`),
+  comboPerf: (id, refresh = false) =>
+    get(`/api/combo-perf?id=${encodeURIComponent(id)}${refresh ? '&refresh=1' : ''}`),
   authorsIndex: () => get('/api/authors-index'),
   author: (name, start, end, country, cstart, cend) => {
     const q = new URLSearchParams({ name });

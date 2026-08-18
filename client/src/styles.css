@@ -472,9 +472,30 @@ tbody tr:not(.group-total):not(.total-row) .lead-cell .cell-val { font-weight: 6
 /* Per-column range filters — the control sits in the header beside the field
    name, so no separate filter row is needed. */
 .th-filter { display: inline-flex; align-items: center; gap: 5px; }
-/* Mirrors the funnel button's width on the other side of the label, so the
-   label stays centred in the column and the values line up under its middle. */
-.th-filter::before { content: ''; width: 18px; flex: none; }
+/* The sort caret mirrors the funnel button's width on the other side of the
+   label, so the label stays centred in the column and the values line up under
+   its middle whether or not the column is sorted. */
+.sort-ind {
+  width: 18px; flex: none; font-size: 8px; line-height: 1;
+  color: var(--brand); visibility: hidden;
+}
+.sort-ind.on { visibility: visible; }
+/* No funnel to balance (e.g. the left-aligned first column) — the caret trails
+   the label instead of indenting it. */
+.th-filter.no-filter .sort-ind { width: auto; }
+/* The field name doubles as the sort control. */
+.th-sort {
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  padding: 0; border: none; background: none; cursor: pointer; white-space: nowrap;
+}
+.th-sort:hover { color: var(--brand); }
+.th-sort:focus-visible { outline: none; color: var(--brand); text-decoration: underline; }
+.th-sort.on { color: var(--brand); }
+/* A filtered column turns its field name the same brand blue as its lit funnel,
+   so an active filter is visible from the header text alone — you don't have to
+   spot the small icon to know the numbers below are a subset. */
+.th-filter.filtered .th-sort,
+.th-filter.filtered > span:not(.sort-ind) { color: var(--brand); font-weight: 700; }
 .filter-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; flex: none;
@@ -484,6 +505,32 @@ tbody tr:not(.group-total):not(.total-row) .lead-cell .cell-val { font-weight: 6
 .filter-btn:hover { background: var(--brand-tint); color: var(--brand); opacity: 1; }
 .filter-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--brand-tint); color: var(--brand); opacity: 1; }
 .filter-btn.on { background: var(--brand-tint); color: var(--brand); opacity: 1; }
+/* Perf. refresh: scores come from the daily pre-measured snapshot, and this
+   re-measures one combination's pages on demand — in a combination table's header,
+   or on an overview row (where each row IS a combination). */
+.perf-cell { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.perf-refresh {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0; flex: none;
+  border: none; border-radius: 5px; background: transparent;
+  color: var(--muted); opacity: 0; cursor: pointer;
+  transition: opacity 0.12s;
+}
+/* In the header it is the column's own control, so it always shows. On a row it
+   stays hidden until that row is hovered — ~50 always-on icons would compete with
+   the numbers — but keeps its width either way, so the score never shifts. */
+.perf-refresh.in-header { opacity: 0.55; }
+tbody tr:hover .perf-refresh { opacity: 0.55; }
+.perf-refresh:hover:not(:disabled) { background: var(--brand-tint); color: var(--brand); opacity: 1; }
+/* Keyboard users never hover — keep it reachable by tab. */
+.perf-refresh:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--brand-tint); color: var(--brand); opacity: 1; }
+/* Measuring: lit but inert, and deliberately NOT animated — the cells already
+   show spinners while the readings come in. */
+.perf-refresh.busy { color: var(--brand); opacity: 1; cursor: default; }
+/* The last re-measure failed and the stored reading is on screen — amber so the
+   number isn't mistaken for a fresh one. Tooltip explains. */
+.perf-refresh.stale { color: var(--warn); opacity: 1; }
+.perf-refresh.stale:hover { background: var(--warn-bg); color: var(--warn); }
 .filter-menu {
   position: fixed; z-index: 60; padding: 4px;
   max-height: 264px; overflow-y: auto;

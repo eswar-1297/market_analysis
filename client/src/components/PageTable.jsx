@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import ColumnFilter from './ColumnFilter.jsx';
-import { makeRanges, fmtRound, inRange } from '../rangeFilter.js';
+import PerfRefresh from './PerfRefresh.jsx';
+import { makeRanges, fmtRound, inRange, nextSort, sortRows } from '../rangeFilter.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
@@ -75,38 +76,71 @@ function SummaryRow({ label, cls, rows, perfCells, leadsValue, leadsDelta }) {
 }
 
 export default function PageTable({ pages: allPages, compare = true, leadsDeltas }) {
-  // Performance score loads lazily per page (slow PageSpeed call), so the table
-  // renders instantly and the Perf. cell fills in when ready.
+  // Performance scores are pre-measured server-side once a day, so this normally
+  // resolves on the first request; the cell still fills in asynchronously because
+  // a page added since the last run has to be measured on the spot.
   const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
+  const [perfAt, setPerfAt] = useState({}); // url -> when that score was measured
+  const [perfStale, setPerfStale] = useState({}); // url -> re-measure failed, showing the old score
+  const [strategy, setStrategy] = useState(null); // 'desktop' | 'mobile', per the server
+  // Shared cancel/timer bag for the in-flight polls, so unmounting or switching
+  // combination stops them — including polls a row's own refresh button started.
+  const live = useRef({ cancelled: false, timers: [] });
   const [filters, setFilters] = useState({}); // colKey -> { lo, hi, idx } | undefined
+  const [sort, setSort] = useState(null); // { key, dir: 'asc' | 'desc' } | null
 
-  useEffect(() => {
-    let cancelled = false;
-    const timers = [];
-    setPerf({});
-    // Scores are measured live, which takes ~20s per page. The server answers
-    // straight away with "pending" rather than holding the request open, so we
-    // poll until the reading lands; the cell shows a spinner meanwhile and the
-    // rest of the table is already on screen.
-    const load = (url, attempt = 0) => {
+  // Load ONE page's score. Normally the server answers from the daily snapshot at
+  // once; when it has to measure, it replies "pending" instead of holding the
+  // request open for ~20s, so we poll until the reading lands and that one cell
+  // spins while the rest of the table is already on screen.
+  // `force` is the row's own refresh button: it re-measures just this page. Only
+  // the FIRST request forces — a poll that kept asking would start a new
+  // measurement every 3s and never settle.
+  const loadPerf = useCallback((url, { force = false } = {}) => {
+    setPerf((s) => ({ ...s, [url]: undefined }));
+    const step = (attempt) => {
       api
-        .cwv(url)
+        .cwv(url, force && attempt === 0)
         .then((d) => {
-          if (cancelled) return;
-          if (d.status === 'pending' && attempt < 40) {
-            timers.push(setTimeout(() => load(url, attempt + 1), 3000));
+          if (live.current.cancelled) return;
+          if (d.status === 'pending' && attempt < 100) {
+            live.current.timers.push(setTimeout(() => step(attempt + 1), 3000));
             return;
           }
+          if (d.strategy) setStrategy(d.strategy);
+          setPerfAt((t) => ({ ...t, [url]: d.measuredAt ?? null }));
+          setPerfStale((f) => ({ ...f, [url]: d.stale ? d.staleReason || true : false }));
           setPerf((s) => ({ ...s, [url]: d.status === 'pending' ? null : d.performanceScore ?? null }));
         })
-        .catch(() => !cancelled && setPerf((s) => ({ ...s, [url]: null })));
+        .catch(() => !live.current.cancelled && setPerf((s) => ({ ...s, [url]: null })));
     };
-    for (const p of allPages) load(p.url);
+    step(0);
+  }, []);
+
+  useEffect(() => {
+    const bag = { cancelled: false, timers: [] };
+    live.current = bag;
+    setPerf({});
+    setPerfAt({});
+    setPerfStale({});
+    for (const p of allPages) loadPerf(p.url);
     return () => {
-      cancelled = true;
-      timers.forEach(clearTimeout);
+      bag.cancelled = true;
+      bag.timers.forEach(clearTimeout);
     };
-  }, [allPages]);
+  }, [allPages, loadPerf]);
+
+  // Re-measure every page in THIS combination — the table only ever shows one, so
+  // the reach of the button is exactly the combination the user has open.
+  const refreshPerf = () => {
+    for (const p of allPages) loadPerf(p.url, { force: true });
+  };
+  const perfBusy = allPages.some((p) => perf[p.url] === undefined);
+  // PageSpeed does fail a page from time to time; when it does the server serves
+  // the previous reading, and the button says so rather than looking like a no-op.
+  const perfStaleAny = allPages.map((p) => perfStale[p.url]).find(Boolean) ?? false;
+  // Newest reading on screen, for the button's "measured …" tooltip.
+  const perfMeasuredAt = Object.values(perfAt).reduce((a, t) => (t && (a == null || t > a) ? t : a), null);
 
   // Page leads sits in its own column (second), so it's declared separately from
   // the metric columns but filters through exactly the same machinery.
@@ -129,12 +163,23 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allPages, perf]);
-  const pages = useMemo(
-    () => allPages.filter((p) => allFilterCols.every((c) => inRange(c.get(p), filters[c.key]))),
+
+  // The page name sorts alphabetically but has no range to filter on, so it sits
+  // outside the filterable columns.
+  const pageCol = { key: 'label', label: 'Page', get: (p) => p.label };
+
+  // Filter first, then sort what's left. `sort === null` keeps the server's own
+  // ordering. Sorting happens before the organic/PPC split, so each group ends
+  // up ordered by the chosen column with its subtotal row still beneath it.
+  const pages = useMemo(() => {
+    const kept = allPages.filter((p) => allFilterCols.every((c) => inRange(c.get(p), filters[c.key])));
+    return sortRows(kept, sort, [pageCol, ...allFilterCols]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allPages, filters, perf]
-  );
+  }, [allPages, filters, sort, perf]);
   const anyFilter = Object.values(filters).some(Boolean);
+  const toggleSort = (key) => setSort((s) => nextSort(s, key));
+  const sortDir = (key) => (sort?.key === key ? sort.dir : null);
+  const sortLabel = sort && [pageCol, ...allFilterCols].find((c) => c.key === sort.key)?.label;
 
   // Lead subtotals come from the rows currently VISIBLE, so they always equal the
   // Page leads column above them — including when filters hide rows. The figure
@@ -201,22 +246,41 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
 
   return (
     <div>
-      {anyFilter && (
+      {(anyFilter || sort) && (
         <div className="filter-summary">
-          Showing {pages.length} of {allPages.length} pages
-          <button type="button" className="filter-clear" onClick={() => setFilters({})}>
-            Clear filters
-          </button>
+          {anyFilter && (
+            <span>
+              Showing {pages.length} of {allPages.length} pages
+            </span>
+          )}
+          {sort && (
+            <span>
+              Sorted by {sortLabel} — {sort.dir === 'asc' ? 'lowest first' : 'highest first'}
+            </span>
+          )}
+          {anyFilter && (
+            <button type="button" className="filter-clear" onClick={() => setFilters({})}>
+              Clear filters
+            </button>
+          )}
+          {sort && (
+            <button type="button" className="filter-clear" onClick={() => setSort(null)}>
+              Reset sort
+            </button>
+          )}
         </div>
       )}
       <div className="table-card">
         <table className="fixed-table">
           <thead>
             <tr>
-              <th>Page</th>
-              {/* "Page leads" first, then the metric columns — every one filterable
-                  from its own header. Page leads are the leads attributed to that
-                  specific page, which can total less than the title's figure. */}
+              <th>
+                <ColumnFilter label={pageCol.label} sort={sortDir(pageCol.key)} onSort={() => toggleSort(pageCol.key)} />
+              </th>
+              {/* "Page leads" first, then the metric columns — click a field name
+                  to sort by it, the funnel to filter it. Page leads are the leads
+                  attributed to that specific page, which can total less than the
+                  title's figure. */}
               {allFilterCols.map((c) => (
                 <th key={c.key}>
                   <ColumnFilter
@@ -228,6 +292,21 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
                         ...f,
                         [c.key]: idx == null ? undefined : { ...ranges[c.key][idx], idx },
                       }))
+                    }
+                    sort={sortDir(c.key)}
+                    onSort={() => toggleSort(c.key)}
+                    action={
+                      c.key === 'perf' ? (
+                        <PerfRefresh
+                          inHeader
+                          measuredAt={perfMeasuredAt}
+                          strategy={strategy}
+                          scope="this combination's pages"
+                          busy={perfBusy}
+                          stale={perfStaleAny}
+                          onClick={refreshPerf}
+                        />
+                      ) : null
                     }
                   />
                 </th>
