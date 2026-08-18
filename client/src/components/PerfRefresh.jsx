@@ -3,8 +3,8 @@
 // is the escape hatch for re-measuring on demand.
 // Its reach is always ONE combination's pages — in the header of a combination's
 // table it re-measures that combination, and on an overview row it re-measures
-// that row's combination. A measurement costs ~20s per page, so nothing here ever
-// re-measures the whole site.
+// that row's combination. A measurement costs 15-55s per page, so nothing here
+// ever re-measures the whole site.
 // It doesn't animate while working: the cells swap to spinners, which is enough.
 export default function PerfRefresh({
   measuredAt,

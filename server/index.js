@@ -14,7 +14,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import {
   pagespeedPage,
   pagespeedSnapshot,
-  pagespeedSnapshotInfo,
+  pagespeedSnapshotInfo, setUnlimitedUrls,
   schedulePagespeedRefresh,
 } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
@@ -34,6 +34,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const COMBOS_FILE = path.join(DATA_DIR, 'combinations.json');
 const OWNERS_FILE = path.join(DATA_DIR, 'owners.json');
+
+// A page is paid (PPC) if it is listed in a combination flagged
+// excludeFromOverview — the PPC group. Single source of that rule; every caller
+// below derives from it rather than repeating the expression.
+function ppcPageUrls(data) {
+  return new Set(
+    (data || loadCombinations()).combinations
+      .filter((c) => c.excludeFromOverview)
+      .flatMap((c) => c.pages.map((p) => p.url))
+  );
+}
 
 function loadCombinations() {
   const base = JSON.parse(fs.readFileSync(COMBOS_FILE, 'utf8'));
@@ -275,9 +286,7 @@ app.get('/api/overview', async (req, res) => {
     const result = await getOverview(combos, start, end, country);
     // PPC leads per combo = Google Ads conversions over that combo's ad (PPC)
     // pages. Attached here so the overview shows organic AND paid leads.
-    const ppcUrls = new Set(
-      data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
-    );
+    const ppcUrls = ppcPageUrls(data);
     await attachPpcLeads(result.rows, combos, ppcUrls, start, end, country);
     // Optional comparison period (cstart/cend, GA-style) → per-combination deltas.
     if (req.query.cstart && req.query.cend) {
@@ -325,9 +334,7 @@ app.get('/api/combinations/:id', async (req, res) => {
     // Flag which pages are paid (PPC) landing pages vs organic, so the table can
     // distinguish them. Source of truth: pages listed in any excludeFromOverview
     // (PPC) group.
-    const ppcUrls = new Set(
-      data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
-    );
+    const ppcUrls = ppcPageUrls(data);
     result.pages = result.pages.map((p) => ({ ...p, ppc: ppcUrls.has(p.url) }));
 
     // Google Ads conversions per page — the PPC equivalent of a HubSpot lead.
@@ -408,9 +415,7 @@ app.get('/api/combinations/:id', async (req, res) => {
 // so they count towards nobody even when they sit inside an authored combination.
 function buildAuthorIndex() {
   const data = loadCombinations();
-  const ppcUrls = new Set(
-    data.combinations.filter((c) => c.excludeFromOverview).flatMap((c) => c.pages.map((p) => p.url))
-  );
+  const ppcUrls = ppcPageUrls(data);
   const byAuthor = {};
   for (const c of data.combinations) {
     if (!c.author) continue;
@@ -672,5 +677,10 @@ app.listen(config.port, () => {
   );
   // Pre-measure Perf. scores daily so the column loads from a stored snapshot
   // instead of running ~50 live PageSpeed calls per visit.
-  if (modeFor('pagespeed') === 'live') schedulePagespeedRefresh(allPageUrls, config.pagespeedRefreshHour);
+  if (modeFor('pagespeed') === 'live') {
+    // Paid landing pages are measured with no deadline — they are the heavy ones
+    // and a deadline is what was cutting them short.
+    setUnlimitedUrls(() => ppcPageUrls());
+    schedulePagespeedRefresh(allPageUrls, config.pagespeedRefreshHour);
+  }
 });

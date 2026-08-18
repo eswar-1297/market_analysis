@@ -24,6 +24,10 @@
         {
           "url": "https://www.cloudfuze.com/slack-to-teams-migration-ads/",
           "label": "slack-to-teams-migration-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/slack-microsoft-teams-migration-solution/",
+          "label": "slack-microsoft-teams-migration-solution"
         }
       ]
     },
@@ -46,6 +50,10 @@
           "destCloud": [
             "Google Chat"
           ]
+        },
+        {
+          "url": "https://www.cloudfuze.com/slack-google-chat-migration-solution/",
+          "label": "slack-google-chat-migration-solution"
         }
       ]
     },
@@ -134,6 +142,10 @@
         {
           "url": "https://www.cloudfuze.com/dropbox-to-google-workspace-ads/",
           "label": "dropbox-to-google-workspace-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-google-workspace-migration-solution/",
+          "label": "dropbox-google-workspace-migration-solution"
         }
       ]
     },
@@ -276,6 +288,10 @@
         {
           "url": "https://www.cloudfuze.com/box-microsoft365-google-ads/",
           "label": "box-microsoft365-google-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/box-microsoft365-migration-solution/",
+          "label": "box-microsoft365-migration-solution"
         }
       ]
     },
@@ -322,6 +338,10 @@
         {
           "url": "https://www.cloudfuze.com/dropbox-microsoft365-google-ads/",
           "label": "dropbox-microsoft365-google-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-microsoft365-migration-solution/",
+          "label": "dropbox-microsoft365-migration-solution"
         }
       ]
     },
@@ -683,6 +703,14 @@
         {
           "url": "https://www.cloudfuze.com/google-workspace-ads/",
           "label": "google-workspace-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/google-workspace-migration-solution/",
+          "label": "google-workspace-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/microsoft-365-migration-solution/",
+          "label": "microsoft-365-migration-solution"
         }
       ],
       "sameCloud": true
@@ -744,6 +772,34 @@
         {
           "url": "https://www.cloudfuze.com/google-workspace-ads/",
           "label": "google-workspace-ads"
+        },
+        {
+          "url": "https://www.cloudfuze.com/slack-microsoft-teams-migration-solution/",
+          "label": "slack-microsoft-teams-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/slack-google-chat-migration-solution/",
+          "label": "slack-google-chat-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-google-workspace-migration-solution/",
+          "label": "dropbox-google-workspace-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/box-microsoft365-migration-solution/",
+          "label": "box-microsoft365-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-microsoft365-migration-solution/",
+          "label": "dropbox-microsoft365-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/google-workspace-migration-solution/",
+          "label": "google-workspace-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/microsoft-365-migration-solution/",
+          "label": "microsoft-365-migration-solution"
         }
       ]
     }

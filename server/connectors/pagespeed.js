@@ -2,7 +2,7 @@
 // Returns a single point-in-time reading per page: LCP (ms), INP (ms),
 // CLS (score), and Lighthouse performance score.
 //
-// These calls are SLOW — ~20s each, and there are ~50 pages. Measuring on demand
+// These calls are SLOW — 15-55s each, and there are ~55 pages. Measuring on demand
 // meant every visit re-ran the lot, so the Perf. column sat spinning for minutes.
 // Instead scores are PRE-MEASURED once a day (07:00 local by default) and served
 // from that snapshot:
@@ -27,10 +27,36 @@ import { config } from '../config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_FILE = path.join(__dirname, '..', '..', 'data', '.cache', 'pagespeed.json');
 
-// How long a stored score stays servable. Comfortably longer than a day so a
-// missed 07:00 run shows yesterday's numbers instead of blanking the column.
+// When a stored score counts as due for replacement. This is NOT how long it stays
+// on screen — a reading is served until something better replaces it. It only
+// decides what the warm-up re-measures. Comfortably longer than a day so a missed
+// 07:00 run doesn't re-measure the whole site on the next boot.
 const SNAPSHOT_TTL = 36 * 60 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 25000;
+// Any measurement deadline is guesswork, and guessing low is what made the column
+// flap: the original 25s sat under the median (measured across the site a call
+// takes 15s-55s, median ~30s, p90 ~48s), so half of all measurements were aborted
+// seconds before they would have returned. Nothing waits on this — the request
+// returns "pending" at once and the client polls — so the ceiling can be generous.
+const FETCH_TIMEOUT_MS = 120000;
+// Paid landing pages are the heavy ones (43-55s observed) and get NO measurement
+// deadline. This guard is not a budget: it exists only so a wedged socket cannot
+// keep a URL in `inflight` for ever, which would stop the daily run from ever
+// re-measuring that page again.
+const WEDGE_GUARD_MS = 10 * 60 * 1000;
+
+// URLs to measure without a deadline, supplied by the server (it owns the rule for
+// which pages are paid). A getter, not a list, so pages added to combinations.json
+// are picked up without a restart.
+let unlimitedUrls = () => new Set();
+export function setUnlimitedUrls(getUrls) {
+  unlimitedUrls = () => {
+    try {
+      return new Set(getUrls());
+    } catch {
+      return new Set();
+    }
+  };
+}
 // Desktop or mobile. PageSpeed treats these as two separate measurements, so a
 // stored score is only comparable to others taken with the SAME profile — hence
 // it's recorded alongside every reading and checked on load.
@@ -99,7 +125,8 @@ async function fetchFresh(url) {
   api.searchParams.set('strategy', STRATEGY);
   if (config.pagespeedApiKey) api.searchParams.set('key', config.pagespeedApiKey);
 
-  const res = await fetch(api, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const budget = unlimitedUrls().has(url) ? WEDGE_GUARD_MS : FETCH_TIMEOUT_MS;
+  const res = await fetch(api, { signal: AbortSignal.timeout(budget) });
   if (!res.ok) throw new Error(`PageSpeed ${res.status}`);
   const json = await res.json();
 
@@ -161,15 +188,20 @@ function refresh(url) {
 }
 
 // Non-blocking read, used by the Perf. column. Returns immediately:
-//   { status: 'ready', data, at }  the daily snapshot (`at` = when it was measured)
-//   { status: 'pending', previous } a measurement is under way; `previous` is the
-//                                  last score (or null) to keep showing meanwhile
-//   { status: 'failed', error }    the fetch errored and nothing is stored
-// The caller polls while it is 'pending'. Pass `{ force: true }` for the Perf.
-// refresh button: it re-measures even when the snapshot is current, and keeps
-// reporting 'pending' until the NEW reading lands — otherwise the very next poll
-// would hand back the old score as ready and the refresh would look instant but
-// change nothing.
+//   { status: 'ready', data, at }  a stored score (`at` = when it was measured)
+//   { status: 'pending' }          nothing stored yet and a measurement is running
+//   { status: 'failed', error }    nothing stored and the measurement errored
+//
+// THE RULE: once a score has appeared in the column it stays there. A stored
+// reading is served for as long as we have one — there is no expiry that takes a
+// number back off the screen and replaces it with a spinner or a dash. Only two
+// things ever change a displayed score: the daily run, which swaps the value in
+// the background, and the refresh button. 'pending' and 'failed' are therefore
+// reachable only for a page that has never been measured successfully at all.
+//
+// `{ force: true }` is the refresh button, and the single exception: the user
+// asked for a new number, so it reports 'pending' until the NEW reading lands
+// rather than handing back the old one as ready and looking like a no-op click.
 export function pagespeedSnapshot(url, { force = false } = {}) {
   const hit = cache.get(url);
   const err = lastError.get(url);
@@ -182,7 +214,7 @@ export function pagespeedSnapshot(url, { force = false } = {}) {
   }
   if (forced.has(url)) return { status: 'pending', previous: hit?.data ?? null, at: hit?.at ?? null };
 
-  if (hit && Date.now() - hit.at < SNAPSHOT_TTL) {
+  if (hit) {
     // A failure recorded AFTER this reading means we tried to replace it and
     // couldn't. Flag it: an unchanged number with no explanation reads as a
     // refresh click that did nothing.
@@ -196,31 +228,27 @@ export function pagespeedSnapshot(url, { force = false } = {}) {
     };
   }
 
-  // Nothing usable stored (a page added since the last daily run, or a cold cache).
-  // Report a recent failure instead of starting yet another fetch — checking this
-  // BEFORE refreshing is what stops a failing URL being re-fetched on every poll.
+  // Never measured. Report a recent failure as a failure — the column shows "—"
+  // with the reason — instead of starting another fetch. Checking this BEFORE
+  // refreshing is what stops a failing URL being re-fetched on every poll.
   if (err && !inflight.has(url) && Date.now() - err.at < FAILURE_COOLDOWN_MS) {
-    if (hit) return { status: 'ready', data: hit.data, at: hit.at, stale: true };
     return { status: 'failed', error: err.message };
   }
 
   const p = refresh(url);
   p.catch(() => {}); // handled by the poller; don't crash on an unhandled rejection
-  return { status: 'pending', previous: hit?.data ?? null, at: hit?.at ?? null };
+  return { status: 'pending', previous: null, at: null };
 }
 
 // Blocking read — still used anywhere a score is needed as part of a response.
 export async function pagespeedPage(url) {
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < SNAPSHOT_TTL) return hit.data; // snapshot is current
-  if (hit) {
-    // Older than the snapshot window: hand back the previous reading immediately
-    // and refresh behind the scenes — nobody should wait 20s for a number that
-    // barely moves. A failed background refresh just keeps the stale value.
-    refresh(url).catch(() => {});
-    return hit.data;
-  }
-  return refresh(url); // cold — nothing to serve but the live call
+  if (!hit) return refresh(url); // cold — nothing to serve but the live call
+  // Same rule as pagespeedSnapshot: always hand back what we have. If it predates
+  // the snapshot window, replace it behind the scenes — nobody should wait ~30s
+  // for a number that barely moves, and a failed refresh just keeps the old value.
+  if (Date.now() - hit.at >= SNAPSHOT_TTL) refresh(url).catch(() => {});
+  return hit.data;
 }
 
 // When the most recent scheduled run was (today's if it has passed, else
