@@ -1,0 +1,176 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # manual re-run of the current commit, no new push needed
+
+# Never run two deploys at once against the same server.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  SSH_HOST: ${{ secrets.SSH_HOST }}
+  SSH_PORT: ${{ secrets.SSH_PORT }}
+  SSH_USER: ${{ secrets.SSH_USER }}
+  DEPLOY_DIR: /opt/market_analysis
+  IMAGE_NAME: market-analysis
+  HEALTH_URL: https://cloudfuzeanalytics.cftools.live
+
+permissions:
+  contents: write # required for Layer 2 (auto-revert) to push a commit
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 1. Syntax check — fails fast, touches nothing on the server.
+  # ---------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install server deps
+        run: npm ci
+
+      - name: Syntax-check every server JS file
+        run: |
+          set -euo pipefail
+          find server -name '*.js' -print0 | xargs -0 -n1 node --check
+          echo "All server files pass a syntax check."
+
+  # ---------------------------------------------------------------------
+  # 2. Deploy — build, swap, health-check, with automatic recovery on failure.
+  # ---------------------------------------------------------------------
+  deploy:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history needed for the revert range on failure
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${SSH_PORT}" "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Package release with git archive
+        run: git archive --format=tar.gz -o release.tar.gz HEAD
+
+      - name: Upload release to server
+        run: |
+          scp -i ~/.ssh/deploy_key -P "${SSH_PORT}" release.tar.gz \
+            "${SSH_USER}@${SSH_HOST}:/tmp/release-${{ github.sha }}.tar.gz"
+
+      - name: Extract release (overlay only — never wipes the deploy directory)
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" "
+            set -euo pipefail
+            mkdir -p ${DEPLOY_DIR}
+            tar -xzf /tmp/release-${{ github.sha }}.tar.gz -C ${DEPLOY_DIR}
+            rm -f /tmp/release-${{ github.sha }}.tar.gz
+            chmod +x ${DEPLOY_DIR}/.deploy/*.sh
+          "
+
+      - name: Database backup
+        run: |
+          echo "market_analysis has no database configured — skipping backup."
+          echo "If a database is added later, back it up here (e.g. pg_dump) BEFORE the build step below, and fail this step if the dump file is empty or suspiciously small."
+
+      # Build happens on a throwaway tag. If this fails, the currently
+      # running container is completely untouched — nothing to roll back.
+      - name: Build new image (does not touch the running container)
+        id: build
+        continue-on-error: true
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
+            "bash ${DEPLOY_DIR}/.deploy/deploy-build.sh ${{ github.sha }}"
+
+      - name: Swap in the new version
+        id: swap
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
+            "bash ${DEPLOY_DIR}/.deploy/deploy-swap.sh ${{ github.sha }}"
+
+      - name: Health check
+        id: healthcheck
+        if: steps.swap.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 10); do
+            echo "Health check attempt $i/10..."
+            if curl -fsSL --max-time 10 "${HEALTH_URL}" > /dev/null; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::Health check failed after 10 attempts."
+          exit 1
+
+      # -----------------------------------------------------------------
+      # LAYER 1 (seconds): restore the previous Docker image immediately.
+      # Never touches git. Runs if the swap or the health check failed.
+      # -----------------------------------------------------------------
+      - name: "Layer 1: automatic rollback of the running container"
+        if: steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
+            "bash ${DEPLOY_DIR}/.deploy/rollback.sh"
+
+      # A dedicated step to work out WHY it failed, rather than an inline
+      # nested ternary expression — easier to get right and to read.
+      - name: Determine failure reason
+        id: reason
+        if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
+        run: |
+          if [ "${{ steps.build.outcome }}" = "failure" ]; then
+            echo "value=build" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.swap.outcome }}" = "failure" ]; then
+            echo "value=swap" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=healthcheck" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------
+      # LAYER 2 (the next minute): revert the whole pushed range as ONE
+      # commit, with a full incident report, and push it. This re-triggers
+      # this same workflow, which deploys the known-good code on its own.
+      # Covers a build failure, a swap failure (e.g. the new container
+      # would not start), or a health-check failure — any case where the
+      # new code is the suspect and production needs to go back to the
+      # last commit that was actually running successfully.
+      #
+      # NOTE: this only undoes code. A database migration that partially
+      # applied before the failure is NOT undone by a code revert — that
+      # requires a human to check manually (also called out in the
+      # generated commit message itself).
+      # -----------------------------------------------------------------
+      - name: "Layer 2: create and push the auto-revert commit"
+        if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILURE_REASON: ${{ steps.reason.outputs.value }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bash .github/scripts/auto-revert.sh
+
+      - name: Fail the workflow if the deploy did not succeed
+        if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
+        run: |
+          echo "::error::Deploy failed. Automatic recovery ran (see the two 'Layer' steps above). See the auto-revert commit on main for the full incident report and recovery instructions."
+          exit 1
