@@ -1,9 +1,3 @@
-// DELIBERATE TEST FAILURE — validating the auto-revert deploy pipeline.
-// This crashes the app on startup on purpose so the health check fails
-// after the new version is swapped in. Should be auto-reverted within a
-// minute of the failed deploy. Safe to delete this block once confirmed.
-throw new Error('DELIBERATE TEST FAILURE: verifying auto-revert pipeline');
-
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
@@ -260,11 +254,6 @@ app.get('/api/meta', (req, res) => {
     defaultCountry: DEFAULT_COUNTRY,
     // Perf. scores are pre-measured daily, so the UI can say how current they are.
     perfSnapshot: { ...pagespeedSnapshotInfo(), refreshHour: config.pagespeedRefreshHour },
-    // TEST MARKER — validating that a multi-commit push gets reverted as a
-    // whole. Should NOT be present once the auto-revert lands; if you see
-    // this field after the workflow reports success, the revert only
-    // reverted part of the range and something is wrong.
-    deployTestMarker: 'auto-revert-range-test-should-not-survive',
   });
 });
 
