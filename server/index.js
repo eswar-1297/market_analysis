@@ -1,3 +1,11 @@
+// DELIBERATE TEST FAILURE — validating the simplified (Layer-1-only) deploy
+// pipeline. Crashes the app on startup on purpose so the health check
+// fails after the new version is swapped in. Expect: the container rolls
+// back to :previous automatically, the workflow fails loudly, and main is
+// left untouched (no auto-revert commit this time). Safe to delete once
+// confirmed.
+throw new Error('DELIBERATE TEST FAILURE: verifying Layer-1-only rollback');
+
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
