@@ -19,7 +19,7 @@ env:
   HEALTH_URL: https://cloudfuzeanalytics.cftools.live
 
 permissions:
-  contents: write # required for Layer 2 (auto-revert) to push a commit
+  contents: read # nothing in this workflow pushes to git
 
 jobs:
   # ---------------------------------------------------------------------
@@ -51,8 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # full history needed for the revert range on failure
 
       - name: Configure SSH
         run: |
@@ -120,57 +118,31 @@ jobs:
           exit 1
 
       # -----------------------------------------------------------------
-      # LAYER 1 (seconds): restore the previous Docker image immediately.
-      # Never touches git. Runs if the swap or the health check failed.
+      # Automatic rollback of the running container. Never touches git —
+      # main is left exactly as pushed. Runs if the swap or the health
+      # check failed. (A build failure needs no rollback at all: nothing
+      # was ever swapped in, so the currently running container was never
+      # touched in the first place.)
+      #
+      # This is production's actual safety net: whatever commit is tagged
+      # market-analysis:previous on the server (the last commit that
+      # itself passed a health check) is what comes back, regardless of
+      # what main says. Fix the code, push again — the next push either
+      # replaces :previous with the fix, or (if it fails too) rolls back
+      # to the same known-good :previous again.
+      #
+      # NOTE: this undoes the running container, not a database. A
+      # migration that partially applied before the failure is NOT undone
+      # by this — that needs a human to check manually.
       # -----------------------------------------------------------------
-      - name: "Layer 1: automatic rollback of the running container"
+      - name: "Automatic rollback of the running container"
         if: steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
         run: |
           ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
             "bash ${DEPLOY_DIR}/.deploy/rollback.sh"
 
-      # A dedicated step to work out WHY it failed, rather than an inline
-      # nested ternary expression — easier to get right and to read.
-      - name: Determine failure reason
-        id: reason
-        if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
-        run: |
-          if [ "${{ steps.build.outcome }}" = "failure" ]; then
-            echo "value=build" >> "$GITHUB_OUTPUT"
-          elif [ "${{ steps.swap.outcome }}" = "failure" ]; then
-            echo "value=swap" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=healthcheck" >> "$GITHUB_OUTPUT"
-          fi
-
-      # -----------------------------------------------------------------
-      # LAYER 2 (the next minute): revert the whole pushed range as ONE
-      # commit, with a full incident report, and push it. This re-triggers
-      # this same workflow, which deploys the known-good code on its own.
-      # Covers a build failure, a swap failure (e.g. the new container
-      # would not start), or a health-check failure — any case where the
-      # new code is the suspect and production needs to go back to the
-      # last commit that was actually running successfully.
-      #
-      # NOTE: this only undoes code. A database migration that partially
-      # applied before the failure is NOT undone by a code revert — that
-      # requires a human to check manually (also called out in the
-      # generated commit message itself).
-      # -----------------------------------------------------------------
-      - name: "Layer 2: create and push the auto-revert commit"
-        if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FAILURE_REASON: ${{ steps.reason.outputs.value }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          bash .github/scripts/auto-revert.sh
-
       - name: Fail the workflow if the deploy did not succeed
         if: steps.build.outcome == 'failure' || steps.swap.outcome == 'failure' || steps.healthcheck.outcome == 'failure'
         run: |
-          echo "::error::Deploy failed. Automatic recovery ran (see the two 'Layer' steps above). See the auto-revert commit on main for the full incident report and recovery instructions."
+          echo "::error::Deploy failed — production was rolled back automatically (or never touched, if the build itself failed) and is running the last commit that passed its own health check. main is left as-is; nothing was reverted in git. Check this run's logs, fix the issue, and push again."
           exit 1
