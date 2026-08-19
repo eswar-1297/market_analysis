@@ -260,6 +260,11 @@ app.get('/api/meta', (req, res) => {
     defaultCountry: DEFAULT_COUNTRY,
     // Perf. scores are pre-measured daily, so the UI can say how current they are.
     perfSnapshot: { ...pagespeedSnapshotInfo(), refreshHour: config.pagespeedRefreshHour },
+    // TEST MARKER — validating that a multi-commit push gets reverted as a
+    // whole. Should NOT be present once the auto-revert lands; if you see
+    // this field after the workflow reports success, the revert only
+    // reverted part of the range and something is wrong.
+    deployTestMarker: 'auto-revert-range-test-should-not-survive',
   });
 });
 
