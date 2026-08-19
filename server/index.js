@@ -1,3 +1,9 @@
+// DELIBERATE TEST FAILURE — validating the auto-revert deploy pipeline.
+// This crashes the app on startup on purpose so the health check fails
+// after the new version is swapped in. Should be auto-reverted within a
+// minute of the failed deploy. Safe to delete this block once confirmed.
+throw new Error('DELIBERATE TEST FAILURE: verifying auto-revert pipeline');
+
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
