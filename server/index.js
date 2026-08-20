@@ -206,12 +206,16 @@ app.get('/api/auth/callback', async (req, res) => {
     // The id_token came directly from Microsoft over TLS in this server-to-server
     // exchange (authenticated with our client secret), so it's trusted as-is.
     const payload = JSON.parse(Buffer.from(tokens.id_token.split('.')[1], 'base64url').toString('utf8'));
+    const email = String(payload.preferred_username || payload.email || '').toLowerCase();
     if (config.ms.allowedDomains.length) {
-      const email = String(payload.preferred_username || payload.email || '').toLowerCase();
       const ok = config.ms.allowedDomains.some((d) => email.endsWith('@' + d) || email.endsWith('.' + d));
       if (!ok) return fail('Your Microsoft account is not permitted to access this dashboard.');
     }
-    res.redirect(`/#token=${sessionToken()}`);
+    // The email rides along in the fragment purely so the SPA can attribute analytics
+    // sessions to a person. It is NOT a credential and grants nothing -- the session
+    // token in the same fragment is the only thing the API checks. Fragments are never
+    // sent to a server, and api.js strips the whole thing from the URL on arrival.
+    res.redirect(`/#token=${sessionToken()}&email=${encodeURIComponent(email)}`);
   } catch (e) {
     fail(e.message || 'Sign-in failed.');
   }
@@ -643,7 +647,11 @@ if (fs.existsSync(dist)) {
   app.use(
     express.static(dist, {
       setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        // index.html and runtime-config.js are both unhashed and both must reflect the
+        // newest deploy immediately -- runtime-config.js is the post-build Hotjar switch,
+        // which a cached copy would silently defeat.
+        if (filePath.endsWith('index.html') || filePath.endsWith('runtime-config.js'))
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         else if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       },
     })

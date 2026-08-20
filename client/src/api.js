@@ -1,20 +1,33 @@
 const TOKEN_KEY = 'cf_token';
+// The signed-in email, kept only to attribute analytics sessions to a person. Not a
+// credential: the API authorises on TOKEN_KEY alone and never reads this.
+const EMAIL_KEY = 'cf_email';
 
 export const auth = {
   token: () => localStorage.getItem(TOKEN_KEY),
   set: (t) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  email: () => localStorage.getItem(EMAIL_KEY) || '',
+  setEmail: (e) => localStorage.setItem(EMAIL_KEY, e),
+  clear: () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(EMAIL_KEY);
+  },
   isAuthed: () => Boolean(localStorage.getItem(TOKEN_KEY)),
 };
 
-// After Microsoft sign-in, the server redirects back to "/#token=<app-token>".
-// Capture it, store it, and strip it from the URL. Runs once on module load,
-// before React reads auth state.
+// After Microsoft sign-in, the server redirects back to
+// "/#token=<app-token>&email=<signed-in-email>". Capture both, store them, and strip the
+// fragment from the URL. Runs once on module load, before React reads auth state.
 (function captureRedirectToken() {
   if (typeof window === 'undefined') return;
-  const m = window.location.hash.match(/[#&]token=([^&]+)/);
+  const hash = window.location.hash;
+  const m = hash.match(/[#&]token=([^&]+)/);
   if (m) {
     auth.set(decodeURIComponent(m[1]));
+    const e = hash.match(/[#&]email=([^&]+)/);
+    // Older deploys redirect without the email; leave whatever is stored alone rather
+    // than blanking it, so analytics attribution survives a mixed-version rollout.
+    if (e) auth.setEmail(decodeURIComponent(e[1]));
     history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 })();

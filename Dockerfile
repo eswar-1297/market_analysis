@@ -11,6 +11,14 @@ RUN npm install
 COPY client/package*.json client/
 RUN npm --prefix client install
 
+# Hotjar Site ID, baked into the client bundle at build time. Must be declared as an
+# ARG here and promoted to ENV before `npm run build`, because Vite reads VITE_* from the
+# build process's environment -- a value passed with no matching ARG is silently dropped
+# and the bundle ships with Hotjar off. Not a secret: it ships in client-side JavaScript.
+# Blank (the default) = Hotjar fully off, no script requested.
+ARG VITE_HOTJAR_SITE_ID=""
+ENV VITE_HOTJAR_SITE_ID=${VITE_HOTJAR_SITE_ID}
+
 # Copy the rest of the source and build the frontend
 COPY . .
 RUN npm run build
