@@ -17,6 +17,11 @@ env:
   DEPLOY_DIR: /opt/market_analysis
   IMAGE_NAME: market-analysis
   HEALTH_URL: https://cloudfuzeanalytics.cftools.live
+  # Hotjar Site ID, baked into the client bundle at image-build time. A repository
+  # VARIABLE, not a secret -- it ships inside client-side JavaScript that any visitor
+  # can read, and masking it as a secret would only make deploy logs harder to debug.
+  # Unset or blank => Hotjar is fully off: no script requested, no session recorded.
+  HOTJAR_SITE_ID: ${{ vars.HOTJAR_SITE_ID }}
 
 permissions:
   contents: read # nothing in this workflow pushes to git
@@ -90,7 +95,7 @@ jobs:
         continue-on-error: true
         run: |
           ssh -i ~/.ssh/deploy_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" \
-            "bash ${DEPLOY_DIR}/.deploy/deploy-build.sh ${{ github.sha }}"
+            "bash ${DEPLOY_DIR}/.deploy/deploy-build.sh ${{ github.sha }} '${HOTJAR_SITE_ID}'"
 
       - name: Swap in the new version
         id: swap

@@ -40,7 +40,13 @@ export default function Owners({ comboId, owners }) {
         {fields.map((f) => (
           <div className="owner-field" key={f.k}>
             <label>{f.label}</label>
-            <input value={form[f.k]} onChange={update(f.k)} placeholder="name / email" />
+            {/* Holds a person's name or email -- kept out of Hotjar session recordings. */}
+            <input
+              value={form[f.k]}
+              onChange={update(f.k)}
+              placeholder="name / email"
+              data-hj-suppress
+            />
           </div>
         ))}
         <button className="btn" onClick={save} disabled={saving}>

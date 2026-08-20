@@ -4,6 +4,7 @@ import { api, auth } from './api.js';
 import PageTable from './components/PageTable.jsx';
 import Overview from './components/Overview.jsx';
 import LoginPage from './components/LoginPage.jsx';
+import { identifyHotjarUser } from './analytics/hotjar.js';
 
 function daysBetween(start, end) {
   return Math.round((new Date(end) - new Date(start)) / 86400000) + 1;
@@ -117,6 +118,14 @@ export default function App() {
     return () => window.removeEventListener('cf-unauthorized', onUnauth);
   }, []);
 
+  // Tag the Hotjar recording with who is signed in, so a recording can be traced back
+  // to the person who hit the problem. Runs on the transition into the authed state --
+  // the email only exists once Microsoft has redirected back. No-ops when Hotjar is off.
+  useEffect(() => {
+    if (!authed) return;
+    identifyHotjarUser({ email: auth.email() });
+  }, [authed]);
+
   useEffect(() => {
     if (!authed) return;
     (async () => {
@@ -219,6 +228,8 @@ export default function App() {
   const titleLeads = organicLeads == null ? null : organicLeads + ppcLeads;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
   const title = comboId ? (selectedCombo ? selectedCombo.name : 'Loading…') : authorMode ? `Author: ${author}` : 'All combinations';
+  // The author view puts a colleague's name in the <h1>; suppress just that case.
+  const suppressTitle = authorMode || undefined;
   const regionLabel = meta?.regions.find((r) => r.code === country)?.label || country;
   const pageCount = selectedCombo?.pageCount;
 
@@ -282,6 +293,7 @@ export default function App() {
               value={author}
               onChange={(e) => goAuthor(e.target.value)}
               title="Filter by author"
+              data-hj-suppress /* colleagues' names -- kept out of session recordings */
             >
               <option value="">All authors</option>
               {authorsList.map((a) => (
@@ -365,7 +377,7 @@ export default function App() {
           {/* All leads for the combination — every source->destination variant
               (including the ones no single page can claim) plus PPC conversions.
               Rendered inside the h1 so it inherits the title's exact font and size. */}
-          <h1 className="h1">
+          <h1 className="h1" data-hj-suppress={suppressTitle}>
             {title}
             {comboId && titleLeads != null && (
               <span
@@ -384,6 +396,7 @@ export default function App() {
               className="title-author"
               onClick={() => goAuthor(selectedCombo.author)}
               title={`See all pages by ${selectedCombo.author}`}
+              data-hj-suppress
             >
               {selectedCombo.author}
             </button>

@@ -13,7 +13,8 @@
     "check": "node server/check.js",
     "auth": "node server/auth.js",
     "ads-auth": "node server/adsAuth.js",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test client/src/analytics/hotjar.test.js"
   },
   "dependencies": {
     "@google-analytics/data": "^4.7.0",

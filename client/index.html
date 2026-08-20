@@ -10,6 +10,12 @@
       href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Runtime config: a blocking classic script in <head>, so window.__APP_CONFIG__
+         exists before anything reads it. It lives here rather than in <body> because
+         Vite hoists the bundle's <script type="module"> into <head> at build time.
+         Copied verbatim from client/public/, so it stays editable after a build. -->
+    <script src="/runtime-config.js"></script>
   </head>
   <body>
     <div id="root"></div>
