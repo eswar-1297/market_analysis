@@ -495,19 +495,26 @@ export async function getLeadsByPage(combo, start, end, country, allCombos = nul
   const byUrl = {};
   for (const p of pages) byUrl[p.url] = mappable.includes(p) ? 0 : null;
 
-  if (modeFor('hubspot') !== 'live') {
-    // Sample mode: spread the mock combo total round-robin over mappable pages
-    // so the column isn't blank when there are no credentials.
+  // Spread the mock combo total round-robin over mappable pages. Used both when
+  // HubSpot isn't configured (sample mode) and as a graceful fallback when a live
+  // pull fails — so a HubSpot outage never 500s the whole detail page, and the
+  // per-page leads stay consistent with the overview's own sample fallback.
+  const sampleResult = (source) => {
+    const sb = {};
+    for (const p of pages) sb[p.url] = mappable.includes(p) ? 0 : null;
     const total = leadsByComboMock([combo], start, end, country).byId[combo.id].total;
     mappable.forEach((p, i) => {
-      byUrl[p.url] = Math.floor(total / mappable.length) + (i < total % mappable.length ? 1 : 0);
+      sb[p.url] = Math.floor(total / mappable.length) + (i < total % mappable.length ? 1 : 0);
     });
-    return { byUrl, attributed: total, unattributed: 0, total };
-  }
+    return { byUrl: sb, attributed: total, unattributed: 0, total, source };
+  };
+
+  if (modeFor('hubspot') !== 'live') return sampleResult('sample');
 
   const sets = comboClouds(combo);
   if (!sets) return { byUrl, attributed: 0, unattributed: 0, total: 0 };
 
+  try {
   const contacts = await getMandatoryContacts(start, end);
   const { sourceProp, destProp } = config.hubspot;
   const region = country && country !== 'ALL' ? country : null;
@@ -562,6 +569,10 @@ export async function getLeadsByPage(combo, start, end, country, allCombos = nul
     }
   }
   return { byUrl, attributed, unattributed: total - attributed, total };
+  } catch (e) {
+    console.error('[hubspot] per-page leads pull failed, using sample data:', e.message);
+    return sampleResult('sample-fallback');
+  }
 }
 
 // Mock: deterministic per-combo lead counts so sample mode still works.
