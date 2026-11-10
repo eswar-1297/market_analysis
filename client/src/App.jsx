@@ -6,7 +6,7 @@ import Overview from './components/Overview.jsx';
 import LoginPage from './components/LoginPage.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import TeamSummary from './components/TeamSummary.jsx';
-import { resolveAuthorship } from './lib/teams.js';
+import { teamClass, teamForCombo } from './lib/teams.js';
 import { identifyHotjarUser } from './analytics/hotjar.js';
 
 function daysBetween(start, end) {
@@ -230,16 +230,18 @@ export default function App() {
   const ppcLeads = detailReady ? detail.totals?.ppcLeads ?? 0 : ovRow ? ovRow.ppcLeads ?? 0 : 0;
   const titleLeads = organicLeads == null ? null : organicLeads + ppcLeads;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
-  // Team attribution is a client-side display mapping (lib/teams.js) over the
-  // same `author` string the API already returns — see that file for the rules.
-  const resolvedAuthor = authorMode ? resolveAuthorship(author) : null;
-  const comboAuthor = comboId && selectedCombo?.author ? resolveAuthorship(selectedCombo.author) : null;
+  // Authorship is resolved server-side, per article (server/attribution.js), so
+  // the names here are already the credited ones — the client only has to find
+  // which team they sit on.
+  const authorTeam = authorMode ? authorsList.find((a) => a.name === author)?.team || null : null;
+  const comboTeam = comboId ? teamForCombo(selectedCombo) : null;
+  const comboAuthors = (comboId && selectedCombo?.authors) || [];
   const title = comboId
     ? selectedCombo
       ? selectedCombo.name
       : 'Loading…'
     : authorMode
-    ? `Author: ${resolvedAuthor?.displayName || author}`
+    ? `Author: ${author}`
     : 'All combinations';
   // The author view puts a colleague's name in the <h1>; suppress just that case.
   const suppressTitle = authorMode || undefined;
@@ -391,22 +393,27 @@ export default function App() {
             )}
           </h1>
           {comboId && compare && detailReady && <LeadsDelta d={detail.leadsDeltas?.combined} />}
-          {authorMode && resolvedAuthor && (
-            <span className={`team-pill ${resolvedAuthor.team.toLowerCase()}`}>{resolvedAuthor.team} team</span>
+          {authorMode && authorTeam && (
+            <span className={`team-pill ${teamClass(authorTeam)}`}>{authorTeam} team</span>
           )}
-          {/* Authorship is per combination (data/combinations.json), shown top-right of the title. */}
-          {comboId && selectedCombo?.author && comboAuthor && (
+          {/* Authorship is per article, so a combination can list several writers;
+              each is a link to that person's pages. */}
+          {comboId && comboAuthors.length > 0 && (
             <span className="title-author-group">
-              <button
-                type="button"
-                className="title-author"
-                onClick={() => goAuthor(selectedCombo.author)}
-                title={`See all pages by ${comboAuthor.displayName}`}
-                data-hj-suppress
-              >
-                {comboAuthor.displayName}
-              </button>
-              <span className={`team-pill ${comboAuthor.team.toLowerCase()}`}>{comboAuthor.team} team</span>
+              {comboAuthors.map((a) => (
+                <button
+                  key={a.name}
+                  type="button"
+                  className="title-author"
+                  onClick={() => goAuthor(a.name)}
+                  title={`See all pages by ${a.name} — ${a.pageCount} page${a.pageCount !== 1 ? 's' : ''} here`}
+                  data-hj-suppress
+                >
+                  {a.name}
+                  {comboAuthors.length > 1 && <span className="title-author-count">{a.pageCount}</span>}
+                </button>
+              ))}
+              {comboTeam && <span className={`team-pill ${teamClass(comboTeam)}`}>{comboTeam} team</span>}
             </span>
           )}
         </div>
@@ -426,7 +433,7 @@ export default function App() {
 
         {!loading && overviewMode && overview && (
           <>
-            <TeamSummary rows={overview.rows} combos={combos} />
+            <TeamSummary authorsList={authorsList} combos={combos} />
             <Overview rows={overview.rows} combos={combos} onOpen={go} compare={compare} />
           </>
         )}

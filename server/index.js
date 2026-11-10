@@ -24,6 +24,7 @@ import { previousPeriod, toISO } from './services/dates.js';
 import { fetchCombinationPages } from './services/fetchData.js';
 import { aggregateCombination } from './services/aggregate.js';
 import { REGIONS, DEFAULT_COUNTRY, isValidCountry } from './regions.js';
+import { resolveAuthorship, teamForDisplayName, TEAMS, ROSTER } from './attribution.js';
 
 // The MCP SDK's HTTP transport relies on the Web Crypto `crypto` global, which
 // isn't defined by default on Node < 20. Polyfill it so /mcp works regardless
@@ -34,6 +35,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const COMBOS_FILE = path.join(DATA_DIR, 'combinations.json');
 const OWNERS_FILE = path.join(DATA_DIR, 'owners.json');
+const PAGE_AUTHORS_FILE = path.join(DATA_DIR, 'page-authors.json');
 
 // A page is paid (PPC) if it is listed in a combination flagged
 // excludeFromOverview — the PPC group. Single source of that rule; every caller
@@ -46,12 +48,53 @@ function ppcPageUrls(data) {
   );
 }
 
+// Per-article authorship, scraped from the live site into data/page-authors.json
+// by `npm run refresh:authors`. Read once at boot: it is a committed file, so a
+// missing or unreadable one must not take the dashboard down — authorship simply
+// goes unknown, which attribution.js already has a defined answer for.
+const PAGE_AUTHORS = (() => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PAGE_AUTHORS_FILE, 'utf8'));
+    return raw.pages || {};
+  } catch {
+    console.warn('[authors] data/page-authors.json missing or unreadable — run `npm run refresh:authors`.');
+    return {};
+  }
+})();
+
+// Lookups must hit exactly, so both sides get the same treatment. Mirrors
+// normalizeUrl() in server/scripts/refresh-page-authors.mjs.
+function normalizeUrl(u) {
+  return String(u || '')
+    .trim()
+    .replace(/^http:/i, 'https:')
+    .replace(/[?#].*$/, '')
+    .replace(/\/?$/, '/')
+    .toLowerCase();
+}
+
+// Who gets credit for one page, after the team-change rules. Returns null for a
+// page with no byline — the PPC ad/landing pages, which belong to nobody.
+function authorshipFor(url) {
+  const rec = PAGE_AUTHORS[normalizeUrl(url)];
+  if (!rec) return null;
+  return resolveAuthorship(rec.author, rec.publishedAt, rec.slug);
+}
+
 function loadCombinations() {
   const base = JSON.parse(fs.readFileSync(COMBOS_FILE, 'utf8'));
   let owners = {};
   if (fs.existsSync(OWNERS_FILE)) owners = JSON.parse(fs.readFileSync(OWNERS_FILE, 'utf8'));
   for (const c of base.combinations) {
     if (owners[c.id]) c.owners = { ...c.owners, ...owners[c.id] };
+    // Authorship hangs off the ARTICLE, not the combination. A combination that
+    // mixes writers reports each page's own byline rather than one blanket name.
+    for (const pg of c.pages) {
+      const a = authorshipFor(pg.url);
+      pg.author = a?.displayName || null;
+      pg.team = a?.team || null;
+      pg.publishedAt = PAGE_AUTHORS[normalizeUrl(pg.url)]?.publishedAt || null;
+    }
   }
   return base;
 }
@@ -274,14 +317,26 @@ app.get('/api/meta', (req, res) => {
 app.get('/api/combinations', (req, res) => {
   const data = loadCombinations();
   res.json(
-    data.combinations.map((c) => ({
-      id: c.id,
-      name: c.name,
-      author: c.author || null,
-      pageCount: c.pages.length,
-      owners: c.owners,
-      excludeFromOverview: Boolean(c.excludeFromOverview),
-    }))
+    data.combinations.map((c) => {
+      // A combination is no longer owned by one writer: authorship is per article,
+      // so report everyone who wrote in it, commonest first, and let `author` mean
+      // "who wrote most of this" for the places that want a single name.
+      const tally = {};
+      for (const pg of c.pages) if (pg.author) tally[pg.author] = (tally[pg.author] || 0) + 1;
+      const authors = Object.entries(tally)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, pageCount]) => ({ name, team: teamForDisplayName(name), pageCount }));
+      return {
+        id: c.id,
+        name: c.name,
+        author: authors[0]?.name || null,
+        authors,
+        teams: [...new Set(authors.map((a) => a.team).filter(Boolean))],
+        pageCount: c.pages.length,
+        owners: c.owners,
+        excludeFromOverview: Boolean(c.excludeFromOverview),
+      };
+    })
   );
 });
 
@@ -422,9 +477,10 @@ app.get('/api/combinations/:id', async (req, res) => {
   }
 });
 
-// Author index: authorship is assigned per combination in combinations.json
-// (data/combinations.json -> author), so every page in a combination belongs to
-// that combination's author. Grouping is pure config — no page scraping.
+// Author index, built from each ARTICLE's own byline (data/page-authors.json)
+// rather than one blanket author per combination. A combination's pages can be
+// written by different people, and the team-change rules in attribution.js move
+// some back catalogues between writers, so grouping has to happen per page.
 // Paid (PPC) landing pages are excluded: they're ad pages, not authored articles,
 // so they count towards nobody even when they sit inside an authored combination.
 function buildAuthorIndex() {
@@ -432,19 +488,33 @@ function buildAuthorIndex() {
   const ppcUrls = ppcPageUrls(data);
   const byAuthor = {};
   for (const c of data.combinations) {
-    if (!c.author) continue;
     for (const pg of c.pages) {
-      if (ppcUrls.has(pg.url)) continue;
-      (byAuthor[c.author] = byAuthor[c.author] || []).push({ url: pg.url, label: pg.label, combo: c.name });
+      if (ppcUrls.has(pg.url) || !pg.author) continue;
+      (byAuthor[pg.author] = byAuthor[pg.author] || []).push({ url: pg.url, label: pg.label, combo: c.name });
     }
   }
   return { authors: Object.keys(byAuthor).sort(), byAuthor };
 }
 
+// The full team roster, not just whoever currently has tracked pages — somebody
+// with nothing published yet still belongs on their team's list, at zero.
 app.get('/api/authors-index', (req, res) => {
   try {
     const idx = buildAuthorIndex();
-    res.json({ authors: idx.authors.map((a) => ({ name: a, pageCount: idx.byAuthor[a].length })) });
+    const counts = Object.fromEntries(idx.authors.map((a) => [a, idx.byAuthor[a].length]));
+    const authors = [];
+    for (const team of [TEAMS.MIGRATE, TEAMS.MANAGE]) {
+      for (const name of ROSTER[team]) {
+        authors.push({ name, team, pageCount: counts[name] || 0 });
+        delete counts[name];
+      }
+    }
+    // Anything the rules produced that isn't on a roster would be a bug in
+    // attribution.js rather than data, but surface it instead of hiding it.
+    for (const [name, pageCount] of Object.entries(counts)) {
+      authors.push({ name, team: teamForDisplayName(name), pageCount });
+    }
+    res.json({ authors, teams: [TEAMS.MIGRATE, TEAMS.MANAGE], roster: ROSTER });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -472,21 +542,24 @@ app.get('/api/author', async (req, res) => {
     ]);
     const result = aggregateCombination({ id: 'author', name, owners: {}, pages }, currentPages, previousPages);
 
-    // Per-page leads. Authorship is assigned per combination, so run the very same
-    // attribution the combination view uses for each of this author's combinations
-    // and merge the results — that way a page shows the identical number in both
-    // views. Pages the author doesn't own simply aren't in this map.
+    // Per-page leads. Lead attribution is a property of the COMBINATION (it keys
+    // off the source->destination pair), so run the very same attribution the
+    // combination view uses — that way a page shows the identical number in both
+    // views. Since authorship is per page, one writer's pages can be spread across
+    // several combinations, so every combination holding at least one of their
+    // pages is evaluated, then trimmed to just the URLs they actually wrote.
     const cfg = loadCombinations();
+    const ownUrls = new Set(pages.map((p) => p.url));
     const leadsByUrl = {};
     const prevLeadsByUrl = {};
-    for (const c of cfg.combinations) {
-      if (c.author !== name) continue;
+    const relevant = cfg.combinations.filter((c) => c.pages.some((pg) => ownUrls.has(pg.url)));
+    for (const c of relevant) {
       const [cur, was] = await Promise.all([
         getLeadsByPage(c, start, end, country, cfg.combinations),
         getLeadsByPage(c, prev.start, prev.end, country, cfg.combinations),
       ]);
-      Object.assign(leadsByUrl, cur.byUrl);
-      Object.assign(prevLeadsByUrl, was.byUrl);
+      for (const [url, v] of Object.entries(cur.byUrl)) if (ownUrls.has(url)) leadsByUrl[url] = v;
+      for (const [url, v] of Object.entries(was.byUrl)) if (ownUrls.has(url)) prevLeadsByUrl[url] = v;
     }
     // Leads are a count, so a zero baseline is read as a multiple: 0 -> 3 is 300%.
     const leadsDelta = (cur, was) => {

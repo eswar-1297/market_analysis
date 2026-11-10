@@ -4,7 +4,7 @@ import PerfRefresh from './PerfRefresh.jsx';
 import PerfCell from './PerfCell.jsx';
 import { pollDelay } from '../perfPoll.js';
 import { sortRows } from '../rangeFilter.js';
-import { TEAMS, teamForCombo, resolveAuthorship } from '../lib/teams.js';
+import { TEAMS, teamClass, teamForCombo } from '../lib/teams.js';
 
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
@@ -181,14 +181,16 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
       <div className="combo-tiles">
         {visible.map((r) => {
           const combo = comboById.get(r.id);
-          const authorship = combo?.author ? resolveAuthorship(combo.author) : null;
-          const team = authorship?.team;
+          // Authorship is resolved server-side, per article. A combination can
+          // span several writers, so show the main one and say how many others.
+          const authors = combo?.authors || [];
+          const team = teamForCombo(combo);
           const dl = r.deltas || {};
           const totalLeads = (r.leads || 0) + (r.ppcLeads || 0);
           return (
             <div
               key={r.id}
-              className={`combo-tile${team ? ` ${team.toLowerCase()}` : ''}`}
+              className={`combo-tile ${teamClass(team)}`}
               onClick={() => onOpen(r.id)}
               role="button"
               tabIndex={0}
@@ -199,11 +201,19 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
                 <span className="tile-pages">{r.pageCount} page{r.pageCount !== 1 ? 's' : ''}</span>
               </div>
 
-              {authorship && (
+              {authors.length > 0 && (
                 <div className="tile-meta">
-                  <span className={`team-dot ${team.toLowerCase()}`} />
+                  <span className={`team-dot ${teamClass(team)}`} />
                   <span className="tile-author" data-hj-suppress>
-                    {authorship.displayName}
+                    {authors[0].name}
+                    {authors.length > 1 && (
+                      <span
+                        className="tile-author-more"
+                        title={authors.map((a) => `${a.name} (${a.pageCount})`).join(', ')}
+                      >
+                        {' '}+{authors.length - 1}
+                      </span>
+                    )}
                   </span>
                 </div>
               )}

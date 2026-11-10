@@ -249,6 +249,14 @@ button { font-family: inherit; }
 }
 .author-chip:hover { border-color: var(--brand-light); color: var(--brand); background: var(--brand-wash); }
 .author-chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+/* A roster member with nothing credited to them yet still belongs on the list —
+   dimmed so the zero reads as "nothing here", not as missing data. */
+.author-chip.empty { opacity: 0.55; }
+.author-chip-count {
+  margin-left: 5px; font-size: 10px; font-weight: 700;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.author-chip.active .author-chip-count { color: rgba(255, 255, 255, 0.85); }
 
 .combo-group-list { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; }
 .combo-item {
@@ -332,6 +340,10 @@ button { font-family: inherit; }
   cursor: pointer;
 }
 .title-author:hover { color: var(--brand); text-decoration: underline; }
+.title-author-count {
+  margin-left: 4px; font-size: 11px; font-weight: 700; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 .team-pill {
   font-size: 11px;
@@ -492,6 +504,8 @@ button { font-family: inherit; }
 
 .tile-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .tile-author { color: var(--muted); font-size: 12px; font-weight: 600; }
+/* "+2" when a combination's articles are split across several writers. */
+.tile-author-more { color: var(--muted-soft); font-weight: 700; cursor: help; }
 
 .tile-leads { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .tile-leads-value { font-family: var(--font-display); font-size: 26px; font-weight: 700; color: var(--ink); letter-spacing: -0.5px; }
@@ -529,6 +543,14 @@ button { font-family: inherit; }
 .team-stat { display: flex; flex-direction: column; gap: 3px; }
 .team-stat .value { font-family: var(--font-display); font-size: 21px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
 .team-stat .k { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.team-card-people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.team-person {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--bg); border-radius: var(--radius-pill);
+  padding: 3px 10px; font-size: 11.5px; font-weight: 600; color: var(--ink-soft);
+}
+.team-person-count { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+.team-person-none { color: var(--muted); font-size: 12px; }
 
 /* ---------- Charts ---------- */
 .charts { grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); margin-bottom: 22px; }

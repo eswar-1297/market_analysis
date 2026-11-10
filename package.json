@@ -11,6 +11,7 @@
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
     "check": "node server/check.js",
+    "refresh:authors": "node server/scripts/refresh-page-authors.mjs",
     "auth": "node server/auth.js",
     "ads-auth": "node server/adsAuth.js",
     "start": "node server/index.js",

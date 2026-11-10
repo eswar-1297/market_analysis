@@ -4,7 +4,6 @@
     {
       "id": "slack-to-teams",
       "name": "Slack to Teams",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -28,13 +27,16 @@
         {
           "url": "https://www.cloudfuze.com/slack-microsoft-teams-migration-solution/",
           "label": "slack-microsoft-teams-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/microsoft-teams-adoption/",
+          "label": "microsoft-teams-adoption"
         }
       ]
     },
     {
       "id": "slack-to-google-chat",
       "name": "Slack to Google Chat",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -60,7 +62,6 @@
     {
       "id": "box-to-google-workspace",
       "name": "Box to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -102,7 +103,6 @@
     {
       "id": "dropbox-to-google-workspace",
       "name": "DropBox to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -152,7 +152,6 @@
     {
       "id": "egnyte-to-google-workspace",
       "name": "Egnyte to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -184,7 +183,6 @@
     {
       "id": "citrix-to-google-workspce",
       "name": "Citrix to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -216,7 +214,6 @@
     {
       "id": "citrix-to-microsoft-365",
       "name": "Citrix to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -248,7 +245,6 @@
     {
       "id": "box-to-microsoft-365",
       "name": "Box to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -298,7 +294,6 @@
     {
       "id": "dropbox-to-microsoft-365",
       "name": "Dropbox to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -342,13 +337,20 @@
         {
           "url": "https://www.cloudfuze.com/dropbox-microsoft365-migration-solution/",
           "label": "dropbox-microsoft365-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/bb-electric-dropbox-to-microsoft-365-migration/",
+          "label": "bb-electric-dropbox-to-microsoft-365-migration"
+        },
+        {
+          "url": "https://www.cloudfuze.com/migrate-files-from-dropbox-to-sharepoint/",
+          "label": "migrate-files-from-dropbox-to-sharepoint"
         }
       ]
     },
     {
       "id": "googledrive-to-microsoft-365",
       "name": "Google Workspace to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -413,7 +415,6 @@
     {
       "id": "egnyte-to-microsoft-365",
       "name": "Egnyte to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -445,7 +446,6 @@
     {
       "id": "microsoft-365-to-google-workspace",
       "name": "Microsoft 365 to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -487,7 +487,6 @@
     {
       "id": "nfs-to-google-workspace",
       "name": "NFS to Google Workspace",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -509,7 +508,6 @@
     {
       "id": "nfs-to-microsoft-365",
       "name": "NFS to Microsoft 365",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -531,7 +529,6 @@
     {
       "id": "box-to-dropbox",
       "name": "Box to Dropbox",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -553,7 +550,6 @@
     {
       "id": "email-migration",
       "name": "Email Migration",
-      "author": "Ayushi",
       "owners": {
         "content": "",
         "seo": "",
@@ -589,6 +585,10 @@
           "destCloud": [
             "Gmail"
           ]
+        },
+        {
+          "url": "https://www.cloudfuze.com/prerequisites-for-large-exchange-online-migrations/",
+          "label": "prerequisites-for-large-exchange-online-migrations"
         }
       ],
       "sourceCloud": [
@@ -603,7 +603,6 @@
     {
       "id": "hyper-link-fixer",
       "name": "Hyper Link Fixer",
-      "author": "Pankaj Rai",
       "owners": {
         "content": "",
         "seo": "",
@@ -631,7 +630,6 @@
     {
       "id": "teanant-to-tenant-migration",
       "name": "Tenant to Tenant Migration",
-      "author": "Ayushi",
       "sourceCloud": [
         "Tenant",
         "Microsoft 365",
@@ -711,6 +709,10 @@
         {
           "url": "https://www.cloudfuze.com/microsoft-365-migration-solution/",
           "label": "microsoft-365-migration-solution"
+        },
+        {
+          "url": "https://www.cloudfuze.com/migrate-m365-tenant-to-tenant/",
+          "label": "migrate-m365-tenant-to-tenant"
         }
       ],
       "sameCloud": true
@@ -718,7 +720,6 @@
     {
       "id": "saas-management",
       "name": "SaaS Management",
-      "author": "Rashmi Ramesh",
       "owners": {
         "content": "",
         "seo": "",
@@ -732,11 +733,120 @@
             "Manage",
             "Manage and Migrate"
           ]
+        },
+        {
+          "url": "https://www.cloudfuze.com/saas-management-spreadsheet-mistakes/",
+          "label": "saas-management-spreadsheet-mistakes"
         }
       ],
       "matchLeadSources": [
         "Manage",
         "Manage and Migrate"
+      ]
+    },
+    {
+      "id": "ai-governance",
+      "name": "AI Governance",
+      "owners": {
+        "content": "",
+        "seo": "",
+        "developer": ""
+      },
+      "matchKeywords": [
+        "ai governance",
+        "ai agent",
+        "agent governance",
+        "shadow ai",
+        "ai compliance",
+        "ai risk"
+      ],
+      "pages": [
+        {
+          "url": "https://www.cloudfuze.com/ai-governance-challenges/",
+          "label": "ai-governance-challenges"
+        },
+        {
+          "url": "https://www.cloudfuze.com/ai-agent-governance-platform/",
+          "label": "ai-agent-governance-platform"
+        },
+        {
+          "url": "https://www.cloudfuze.com/ai-governance-assessment/",
+          "label": "ai-governance-assessment"
+        },
+        {
+          "url": "https://www.cloudfuze.com/ai-governance-for-regulated-enterprises/",
+          "label": "ai-governance-for-regulated-enterprises"
+        },
+        {
+          "url": "https://www.cloudfuze.com/ai-governance-best-practices/",
+          "label": "ai-governance-best-practices"
+        },
+        {
+          "url": "https://www.cloudfuze.com/ai-governance-framework/",
+          "label": "ai-governance-framework"
+        },
+        {
+          "url": "https://www.cloudfuze.com/principles-of-ai-governance/",
+          "label": "principles-of-ai-governance"
+        }
+      ]
+    },
+    {
+      "id": "cloud-migration-services",
+      "name": "Cloud Migration Services & Consulting",
+      "owners": {
+        "content": "",
+        "seo": "",
+        "developer": ""
+      },
+      "pages": [
+        {
+          "url": "https://www.cloudfuze.com/cloud-migration-services-in-usa/",
+          "label": "cloud-migration-services-in-usa"
+        },
+        {
+          "url": "https://www.cloudfuze.com/cloud-migration-services-in-the-uk/",
+          "label": "cloud-migration-services-in-the-uk"
+        },
+        {
+          "url": "https://www.cloudfuze.com/cloud-migration-consulting/",
+          "label": "cloud-migration-consulting"
+        },
+        {
+          "url": "https://www.cloudfuze.com/cloud-migration-assessment/",
+          "label": "cloud-migration-assessment"
+        },
+        {
+          "url": "https://www.cloudfuze.com/sharepoint-migration-consultant/",
+          "label": "sharepoint-migration-consultant"
+        },
+        {
+          "url": "https://www.cloudfuze.com/sharepoint-migration-services/",
+          "label": "sharepoint-migration-services"
+        }
+      ]
+    },
+    {
+      "id": "migration-planning",
+      "name": "Migration Planning & Troubleshooting",
+      "owners": {
+        "content": "",
+        "seo": "",
+        "developer": ""
+      },
+      "pages": [
+        {
+          "url": "https://www.cloudfuze.com/chat-message-migration/",
+          "label": "chat-message-migration"
+        },
+        {
+          "url": "https://www.cloudfuze.com/dropbox-migration-problems-solved/",
+          "label": "dropbox-migration-problems-solved"
+        },
+        {
+          "url": "https://www.cloudfuze.com/common-technical-challenges-while-migrating-to-onedrive-for-business/",
+          "label": "common-technical-challenges-while-migrating-to-onedrive-for-business"
+        }
       ]
     },
     {

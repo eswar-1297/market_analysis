@@ -1,7 +1,5 @@
 import { useMemo, useState } from 'react';
-import { TEAMS, teamForCombo, groupAuthorsByTeam } from '../lib/teams.js';
-
-const TEAM_ORDER = [TEAMS.MIGRATE, TEAMS.MANAGE];
+import { TEAM_ORDER, teamClass, teamForCombo, groupAuthorsByTeam } from '../lib/teams.js';
 
 function ComboRow({ combo, active, onClick }) {
   const team = teamForCombo(combo);
@@ -12,7 +10,7 @@ function ComboRow({ combo, active, onClick }) {
       onClick={onClick}
       aria-label={`${combo.name} — ${combo.pageCount} page${combo.pageCount !== 1 ? 's' : ''}`}
     >
-      <span className={`dot ${team ? team.toLowerCase() : 'neutral'}`} />
+      <span className={`dot ${teamClass(team)}`} />
       <span className="combo-item-body">
         <span className="name">{combo.name}</span>
         <span className="meta">
@@ -42,13 +40,18 @@ export default function Sidebar({
   const query = q.trim().toLowerCase();
   const matches = (c) => !query || c.name.toLowerCase().includes(query);
 
-  const byTeam = useMemo(() => {
-    const out = { [TEAMS.MIGRATE]: [], [TEAMS.MANAGE]: [] };
+  // Grouped by team, with an explicit bucket for combinations that belong to
+  // neither — a combination made only of unbylined pages has no team, and
+  // dropping it would quietly remove it from the only navigation there is.
+  const { byTeam, teamless } = useMemo(() => {
+    const out = Object.fromEntries(TEAM_ORDER.map((t) => [t, []]));
+    const rest = [];
     for (const c of realCombos) {
       const team = teamForCombo(c);
       if (team && out[team]) out[team].push(c);
+      else rest.push(c);
     }
-    return out;
+    return { byTeam: out, teamless: rest };
   }, [realCombos]);
 
   const authorGroups = useMemo(() => groupAuthorsByTeam(authorsList), [authorsList]);
@@ -111,13 +114,16 @@ export default function Sidebar({
                 <div className="author-chips" data-hj-suppress>
                   {authors.map((a) => (
                     <button
-                      key={a.raw}
+                      key={a.name}
                       type="button"
-                      className={`author-chip${authorMode && selectedAuthor === a.raw ? ' active' : ''}`}
-                      title={`${a.label} — ${a.pageCount} page${a.pageCount !== 1 ? 's' : ''}`}
-                      onClick={() => onSelectAuthor(a.raw)}
+                      className={`author-chip${authorMode && selectedAuthor === a.name ? ' active' : ''}${
+                        a.pageCount ? '' : ' empty'
+                      }`}
+                      title={`${a.name} — ${a.pageCount} page${a.pageCount !== 1 ? 's' : ''}`}
+                      onClick={() => onSelectAuthor(a.name)}
                     >
-                      {a.label}
+                      {a.name}
+                      <span className="author-chip-count">{a.pageCount}</span>
                     </button>
                   ))}
                 </div>
@@ -136,6 +142,26 @@ export default function Sidebar({
             </div>
           );
         })}
+
+        {teamless.filter(matches).length > 0 && (
+          <div className="team-group">
+            <div className="team-heading">
+              <span className="team-dot" />
+              Unattributed
+              <span className="team-heading-count">{teamless.length}</span>
+            </div>
+            <div className="combo-group-list">
+              {teamless.filter(matches).map((c) => (
+                <ComboRow
+                  key={c.id}
+                  combo={c}
+                  active={!overviewMode && !authorMode && c.id === selectedId}
+                  onClick={() => onSelectCombo(c.id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {ppcCombos.filter(matches).length > 0 && (
           <div className="team-group">

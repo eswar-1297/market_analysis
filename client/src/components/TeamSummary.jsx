@@ -1,60 +1,63 @@
-import { TEAMS, teamForCombo } from '../lib/teams.js';
+import { TEAM_ORDER, teamClass } from '../lib/teams.js';
 
-const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n)));
-
-const CARDS = [
-  { key: TEAMS.MIGRATE, label: 'Migrate team', tone: 'migrate' },
-  { key: TEAMS.MANAGE, label: 'Manage team', tone: 'manage' },
-];
-
-// Rolls the all-combinations overview up by team (Manage vs Migrate), using the
-// author -> team mapping in lib/teams.js. Purely a client-side aggregation over
-// data the API already returns — no backend involvement.
-export default function TeamSummary({ rows, combos }) {
-  const comboById = new Map(combos.map((c) => [c.id, c]));
-  const totals = {
-    [TEAMS.MIGRATE]: { leads: 0, ppcLeads: 0, clicks: 0, views: 0, combos: 0 },
-    [TEAMS.MANAGE]: { leads: 0, ppcLeads: 0, clicks: 0, views: 0, combos: 0 },
-  };
-
-  for (const r of rows) {
-    const combo = comboById.get(r.id);
-    const team = combo ? teamForCombo(combo) : null;
-    if (!team) continue;
-    const t = totals[team];
-    t.leads += r.leads || 0;
-    t.ppcLeads += r.ppcLeads || 0;
-    t.clicks += r.clicks || 0;
-    t.views += r.views || 0;
-    t.combos += 1;
-  }
+// Per-team output, counted from the authorship the server has already resolved
+// per article (/api/authors-index + the authors on each combination).
+//
+// Deliberately NOT leads/clicks/views: those metrics exist per COMBINATION, and a
+// combination's articles can be written by both teams — several are. Splitting a
+// combination's leads between teams would mean inventing a share, and charging the
+// whole figure to whichever team happens to be listed first overstates one and
+// zeroes the other. Article and combination counts are exact, so those are what
+// this reports; the per-combination numbers live in the tiles below, where they
+// are true.
+export default function TeamSummary({ authorsList, combos }) {
+  const byTeam = Object.fromEntries(
+    TEAM_ORDER.map((team) => {
+      const people = (authorsList || []).filter((a) => a.team === team);
+      const articles = people.reduce((n, a) => n + (a.pageCount || 0), 0);
+      const names = new Set(people.map((a) => a.name));
+      const combinations = (combos || []).filter(
+        (c) => !c.excludeFromOverview && (c.authors || []).some((a) => names.has(a.name))
+      ).length;
+      // Busiest first, and only people who actually have credited articles.
+      const contributors = [...people].filter((a) => a.pageCount > 0).sort((a, b) => b.pageCount - a.pageCount);
+      return [team, { people, contributors, articles, combinations }];
+    })
+  );
 
   return (
     <div className="grid team-cards">
-      {CARDS.map((c) => {
-        const t = totals[c.key];
+      {TEAM_ORDER.map((team) => {
+        const t = byTeam[team];
         return (
-          <div className={`card team-card ${c.tone}`} key={c.key}>
+          <div className={`card team-card ${teamClass(team)}`} key={team}>
             <div className="team-card-head">
-              <span className={`team-dot ${c.tone}`} />
-              <span className="team-card-label">{c.label}</span>
+              <span className={`team-dot ${teamClass(team)}`} />
+              <span className="team-card-label">{team} team</span>
               <span className="team-card-count">
-                {t.combos} combination{t.combos !== 1 ? 's' : ''}
+                {t.people.length} {t.people.length === 1 ? 'person' : 'people'}
               </span>
             </div>
+
             <div className="team-card-stats">
               <div className="team-stat">
-                <span className="value">{fmt(t.leads + t.ppcLeads)}</span>
-                <span className="k">Total leads</span>
+                <span className="value">{t.articles}</span>
+                <span className="k">Articles</span>
               </div>
               <div className="team-stat">
-                <span className="value">{fmt(t.clicks)}</span>
-                <span className="k">Organic clicks</span>
+                <span className="value">{t.combinations}</span>
+                <span className="k">Combinations</span>
               </div>
-              <div className="team-stat">
-                <span className="value">{fmt(t.views)}</span>
-                <span className="k">Views</span>
-              </div>
+            </div>
+
+            <div className="team-card-people" data-hj-suppress>
+              {t.contributors.map((a) => (
+                <span className="team-person" key={a.name}>
+                  {a.name}
+                  <span className="team-person-count">{a.pageCount}</span>
+                </span>
+              ))}
+              {!t.contributors.length && <span className="team-person-none">No credited articles yet</span>}
             </div>
           </div>
         );
