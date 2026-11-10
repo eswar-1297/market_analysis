@@ -143,6 +143,16 @@ const msAuthority = () => `https://login.microsoftonline.com/${config.ms.tenantI
 // must be registered in the Azure app registration.
 const redirectUri = (req) => `${req.protocol}://${req.get('host')}/api/auth/callback`;
 
+// No built client bundle (dev mode): the SPA lives on Vite's dev server, not this
+// API port, so post-login redirects must target it explicitly. Vite's dev proxy
+// sets changeOrigin, which rewrites Host to this API port on every /api request --
+// so redirectUri() above always resolves here even when sign-in started on the
+// Vite port. Without this, the browser lands on "GET /" against a bare API server
+// that has no route for it.
+const clientDistExists = fs.existsSync(path.join(__dirname, '..', 'client', 'dist'));
+const DEV_CLIENT_URL = process.env.DEV_CLIENT_URL || 'http://localhost:5173';
+const spaOrigin = () => (clientDistExists ? '' : DEV_CLIENT_URL);
+
 // CSRF state: signed with the client secret, valid for 10 minutes (stateless).
 function signState() {
   const raw = `${Date.now()}.${crypto.randomBytes(9).toString('hex')}`;
@@ -183,7 +193,7 @@ app.get('/api/auth/login', (req, res) => {
 // Step 2 — Microsoft redirects back here with a code; exchange it, then hand the
 // app session token to the SPA via the URL fragment.
 app.get('/api/auth/callback', async (req, res) => {
-  const fail = (msg) => res.redirect(`/?auth_error=${encodeURIComponent(msg)}`);
+  const fail = (msg) => res.redirect(`${spaOrigin()}/?auth_error=${encodeURIComponent(msg)}`);
   const { code, state, error, error_description } = req.query;
   if (error) return fail(error_description || error);
   if (!code || !verifyState(state)) return fail('Sign-in expired or invalid — please try again.');
@@ -215,7 +225,7 @@ app.get('/api/auth/callback', async (req, res) => {
     // sessions to a person. It is NOT a credential and grants nothing -- the session
     // token in the same fragment is the only thing the API checks. Fragments are never
     // sent to a server, and api.js strips the whole thing from the URL on arrival.
-    res.redirect(`/#token=${sessionToken()}&email=${encodeURIComponent(email)}`);
+    res.redirect(`${spaOrigin()}/#token=${sessionToken()}&email=${encodeURIComponent(email)}`);
   } catch (e) {
     fail(e.message || 'Sign-in failed.');
   }
