@@ -427,7 +427,7 @@ export default function App() {
         {!loading && overviewMode && overview && (
           <>
             <TeamSummary rows={overview.rows} combos={combos} />
-            <Overview rows={overview.rows} onOpen={go} compare={compare} />
+            <Overview rows={overview.rows} combos={combos} onOpen={go} compare={compare} />
           </>
         )}
 

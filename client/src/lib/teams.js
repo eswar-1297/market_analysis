@@ -20,15 +20,19 @@
 
 export const TEAMS = { MANAGE: 'Manage', MIGRATE: 'Migrate' };
 
+// Display roster — the named individuals on each team, in the proper-cased form
+// the UI shows. Always rendered in the sidebar (even at 0 pages), so a team
+// member who hasn't been credited for anything yet still appears.
+export const MIGRATE_ROSTER_NAMES = ['Pankaj Rai', 'Preksha', 'Bhuvaneswari'];
+export const MANAGE_ROSTER_NAMES = ['Rashmi Ramesh', 'Aayushi'];
+
 const AAYUSHI_CUTOVER = Date.parse('2026-11-04T00:00:00Z');
 const AAYUSHI_NAMES = new Set(['aayushi', 'ayushi']);
 
-const MANAGE_ROSTER = new Set(['rashmi ramesh']);
+const MANAGE_ROSTER = new Set(MANAGE_ROSTER_NAMES.map((n) => n.toLowerCase()));
 const MIGRATE_ROSTER = new Set([
-  'pankaj rai',
-  'preksha',
+  ...MIGRATE_ROSTER_NAMES.map((n) => n.toLowerCase()),
   'preksha joshi',
-  'bhuvaneswari',
   'bhuvaneswari gireesh',
 ]);
 
@@ -60,19 +64,22 @@ export function teamForCombo(combo) {
   return resolveAuthorship(combo?.author)?.team || null;
 }
 
-// Buckets the server's raw author list (/api/authors-index) into the two teams
-// for display. Each entry keeps the RAW name for querying (the API's
-// /api/author?name= is keyed on the exact stored author string) alongside a
-// label that reflects re-attribution — e.g. Aayushi's pre-cutover combinations
-// read "Pankaj Rai (from Ayushi)" rather than silently becoming indistinguishable
-// from his own byline.
+// Sidebar team rosters — always the full named team, not just whoever already
+// has content. A member with nothing published yet still shows up (0 pages)
+// rather than being invisible until their first article lands. Each entry's
+// `raw` is only set when the server's author index has an EXACT match for that
+// name — content re-attributed from someone else (e.g. Aayushi's pre-cutover
+// work, now credited to Pankaj) is folded into his own count, never called out
+// as a separate "(from X)" entry.
 export function groupAuthorsByTeam(authorsList) {
-  const groups = { [TEAMS.MIGRATE]: [], [TEAMS.MANAGE]: [] };
-  for (const a of authorsList || []) {
-    const r = resolveAuthorship(a.name);
-    if (!r) continue;
-    const label = r.displayName === a.name ? a.name : `${r.displayName} (from ${a.name})`;
-    groups[r.team].push({ raw: a.name, label, displayName: r.displayName, pageCount: a.pageCount });
-  }
-  return groups;
+  const byName = new Map((authorsList || []).map((a) => [a.name.toLowerCase(), a]));
+  const build = (names) =>
+    names.map((name) => {
+      const match = byName.get(name.toLowerCase());
+      return { raw: match ? match.name : name, displayName: name, label: name, pageCount: match?.pageCount || 0 };
+    });
+  return {
+    [TEAMS.MIGRATE]: build(MIGRATE_ROSTER_NAMES),
+    [TEAMS.MANAGE]: build(MANAGE_ROSTER_NAMES),
+  };
 }
