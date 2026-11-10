@@ -10,7 +10,7 @@ import {
 
 const shortDate = (d) => d?.slice(5); // MM-DD
 
-export default function TrendChart({ title, hint, data, color = '#4f7cff', height = 220 }) {
+export default function TrendChart({ title, hint, data, color = '#2541e0', height = 220 }) {
   return (
     <div className="chart-card">
       <div className="chart-title">
@@ -19,26 +19,26 @@ export default function TrendChart({ title, hint, data, color = '#4f7cff', heigh
       </div>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data} margin={{ top: 6, right: 12, left: -8, bottom: 0 }}>
-          <CartesianGrid stroke="#eef1f7" strokeDasharray="3 3" vertical={false} />
+          <CartesianGrid stroke="#eef1f6" strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="date"
             tickFormatter={shortDate}
-            stroke="#a4adbf"
-            tick={{ fill: '#7a869c' }}
+            stroke="#d7dcec"
+            tick={{ fill: '#7983a0' }}
             fontSize={11}
             minTickGap={24}
           />
-          <YAxis stroke="#a4adbf" tick={{ fill: '#7a869c' }} fontSize={11} width={48} />
+          <YAxis stroke="#d7dcec" tick={{ fill: '#7983a0' }} fontSize={11} width={48} />
           <Tooltip
             contentStyle={{
               background: '#ffffff',
-              border: '1px solid #d5dce8',
+              border: '1px solid #d7dcec',
               borderRadius: 10,
-              color: '#1a2233',
+              color: '#10162b',
               fontSize: 12,
-              boxShadow: '0 6px 22px rgba(16,32,74,0.10)',
+              boxShadow: '0 10px 28px rgba(13,24,59,0.12)',
             }}
-            labelStyle={{ color: '#7a869c' }}
+            labelStyle={{ color: '#7983a0' }}
           />
           <Line
             type="monotone"

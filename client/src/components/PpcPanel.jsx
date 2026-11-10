@@ -32,8 +32,8 @@ export default function PpcPanel({ data }) {
       </div>
 
       <div className="grid charts">
-        <TrendChart title="Ad spend ($)" hint="Google Ads via GA4" data={data.trends.spend} color="#e07b39" />
-        <TrendChart title="Ad clicks" hint="Google Ads" data={data.trends.clicks} color="#d64550" />
+        <TrendChart title="Ad spend ($)" hint="Google Ads via GA4" data={data.trends.spend} color="#c2660f" />
+        <TrendChart title="Ad clicks" hint="Google Ads" data={data.trends.clicks} color="#7c5cff" />
         <TrendChart title="Paid sessions" hint="Paid Search" data={data.trends.sessions} color="#0129ac" />
         <TrendChart title="Paid conversions" hint="Paid Search" data={data.trends.conversions} color="#0e9f6e" />
       </div>

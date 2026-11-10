@@ -4,6 +4,9 @@ import { api, auth } from './api.js';
 import PageTable from './components/PageTable.jsx';
 import Overview from './components/Overview.jsx';
 import LoginPage from './components/LoginPage.jsx';
+import Sidebar from './components/Sidebar.jsx';
+import TeamSummary from './components/TeamSummary.jsx';
+import { resolveAuthorship } from './lib/teams.js';
 import { identifyHotjarUser } from './analytics/hotjar.js';
 
 function daysBetween(start, end) {
@@ -61,6 +64,7 @@ export default function App() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [authed, setAuthed] = useState(auth.isAuthed());
+  const [navOpen, setNavOpen] = useState(false);
   const [meta, setMeta] = useState(null);
   const [combos, setCombos] = useState([]);
   const [detail, setDetail] = useState(null);
@@ -97,6 +101,7 @@ export default function App() {
     const qs = sp.toString();
     const p = id === '__all__' ? '/' : `/c/${id}`;
     navigate(qs ? `${p}?${qs}` : p);
+    setNavOpen(false);
   };
   const goAuthor = (name) => {
     const sp = new URLSearchParams(searchParams);
@@ -104,6 +109,7 @@ export default function App() {
     else sp.delete('author');
     const qs = sp.toString();
     navigate(qs ? `/?${qs}` : '/'); // author view lives at the root path
+    setNavOpen(false);
   };
   const setParam = (key, value) => {
     const sp = new URLSearchParams(searchParams);
@@ -209,9 +215,6 @@ export default function App() {
   }, [selectedId, start, end, country, authed, compare, cstart, cend]);
 
   const selectedCombo = combos.find((c) => c.id === selectedId);
-  // Real source→destination combinations vs. dropdown-only groups (e.g. PPC).
-  const realCombos = combos.filter((c) => !c.excludeFromOverview);
-  const ppcCombos = combos.filter((c) => c.excludeFromOverview);
   // Leads for the selected combination come straight from the already-loaded
   // overview (it returns leads + delta per combo), so the badge is instant — no
   // wait for the detail fetch. Falls back to the detail response if the overview
@@ -227,7 +230,17 @@ export default function App() {
   const ppcLeads = detailReady ? detail.totals?.ppcLeads ?? 0 : ovRow ? ovRow.ppcLeads ?? 0 : 0;
   const titleLeads = organicLeads == null ? null : organicLeads + ppcLeads;
   const hasErrors = detailReady && Object.keys(detail.errors || {}).length > 0;
-  const title = comboId ? (selectedCombo ? selectedCombo.name : 'Loading…') : authorMode ? `Author: ${author}` : 'All combinations';
+  // Team attribution is a client-side display mapping (lib/teams.js) over the
+  // same `author` string the API already returns — see that file for the rules.
+  const resolvedAuthor = authorMode ? resolveAuthorship(author) : null;
+  const comboAuthor = comboId && selectedCombo?.author ? resolveAuthorship(selectedCombo.author) : null;
+  const title = comboId
+    ? selectedCombo
+      ? selectedCombo.name
+      : 'Loading…'
+    : authorMode
+    ? `Author: ${resolvedAuthor?.displayName || author}`
+    : 'All combinations';
   // The author view puts a colleague's name in the <h1>; suppress just that case.
   const suppressTitle = authorMode || undefined;
   const regionLabel = meta?.regions.find((r) => r.code === country)?.label || country;
@@ -237,10 +250,39 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <div className={`sidebar-backdrop${navOpen ? ' show' : ''}`} onClick={() => setNavOpen(false)} />
+      <div className={navOpen ? 'sidebar-wrap open' : 'sidebar-wrap'}>
+        <Sidebar
+          combos={combos}
+          selectedId={selectedId}
+          overviewMode={overviewMode}
+          authorMode={authorMode}
+          selectedAuthor={author}
+          authorsList={authorsList}
+          meta={meta}
+          onSelectCombo={go}
+          onSelectAuthor={goAuthor}
+        />
+      </div>
+      <div className="app-main">
       <header className="appbar">
         <div className="appbar-top">
-          <div className="brand">
-            Cloud<span>Fuze</span> Marketing
+          <div className="appbar-left-mobile">
+            <button
+              type="button"
+              className="nav-toggle"
+              aria-label="Toggle navigation"
+              onClick={() => setNavOpen((o) => !o)}
+            >
+              <svg viewBox="0 0 18 14" width="17" height="14" aria-hidden="true">
+                <rect width="18" height="2" rx="1" fill="currentColor" />
+                <rect y="6" width="18" height="2" rx="1" fill="currentColor" />
+                <rect y="12" width="18" height="2" rx="1" fill="currentColor" />
+              </svg>
+            </button>
+            <div className="brand brand-mobile">
+              Cloud<span>Fuze</span> Marketing
+            </div>
           </div>
           <div className="appbar-right">
             {meta && (
@@ -262,48 +304,8 @@ export default function App() {
         </div>
 
         <div className="appbar-controls">
-          <select
-            className="combo-select"
-            value={comboId ? selectedId : '__all__'}
-            onChange={(e) => go(e.target.value)}
-            title="Select a view"
-          >
-            <option value="__all__">All combinations ({realCombos.length})</option>
-            {ppcCombos.length > 0 && (
-              <optgroup label="Paid (PPC)">
-                {ppcCombos.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.pageCount})
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <optgroup label="Combinations">
-              {realCombos.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.pageCount})
-                </option>
-              ))}
-            </optgroup>
-          </select>
-
-          {authorsList.length > 0 && (
-            <select
-              className="region-select"
-              value={author}
-              onChange={(e) => goAuthor(e.target.value)}
-              title="Filter by author"
-              data-hj-suppress /* colleagues' names -- kept out of session recordings */
-            >
-              <option value="">All authors</option>
-              {authorsList.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.name} ({a.pageCount})
-                </option>
-              ))}
-            </select>
-          )}
-
+          {/* Combination/author navigation now lives in the sidebar; this bar is
+              purely for slicing the current view (region, dates, comparison). */}
           {meta && (
             <select
               className="region-select"
@@ -389,17 +391,23 @@ export default function App() {
             )}
           </h1>
           {comboId && compare && detailReady && <LeadsDelta d={detail.leadsDeltas?.combined} />}
+          {authorMode && resolvedAuthor && (
+            <span className={`team-pill ${resolvedAuthor.team.toLowerCase()}`}>{resolvedAuthor.team} team</span>
+          )}
           {/* Authorship is per combination (data/combinations.json), shown top-right of the title. */}
-          {comboId && selectedCombo?.author && (
-            <button
-              type="button"
-              className="title-author"
-              onClick={() => goAuthor(selectedCombo.author)}
-              title={`See all pages by ${selectedCombo.author}`}
-              data-hj-suppress
-            >
-              {selectedCombo.author}
-            </button>
+          {comboId && selectedCombo?.author && comboAuthor && (
+            <span className="title-author-group">
+              <button
+                type="button"
+                className="title-author"
+                onClick={() => goAuthor(selectedCombo.author)}
+                title={`See all pages by ${comboAuthor.displayName}`}
+                data-hj-suppress
+              >
+                {comboAuthor.displayName}
+              </button>
+              <span className={`team-pill ${comboAuthor.team.toLowerCase()}`}>{comboAuthor.team} team</span>
+            </span>
           )}
         </div>
 
@@ -416,7 +424,12 @@ export default function App() {
 
         {loading && <div className="loading">Loading data…</div>}
 
-        {!loading && overviewMode && overview && <Overview rows={overview.rows} onOpen={go} compare={compare} />}
+        {!loading && overviewMode && overview && (
+          <>
+            <TeamSummary rows={overview.rows} combos={combos} />
+            <Overview rows={overview.rows} onOpen={go} compare={compare} />
+          </>
+        )}
 
         {!loading && authorMode && authorData && (
           authorData.pages.length ? (
@@ -443,6 +456,7 @@ export default function App() {
           />
         )}
       </main>
+      </div>
     </div>
   );
 }
