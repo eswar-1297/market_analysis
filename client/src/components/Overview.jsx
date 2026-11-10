@@ -6,6 +6,10 @@ import { pollDelay } from '../perfPoll.js';
 import { sortRows } from '../rangeFilter.js';
 import { TEAMS, teamClass, teamForCombo } from '../lib/teams.js';
 
+// Mobile and desktop are separate, non-comparable PageSpeed measurements.
+const PROFILES = ['mobile', 'desktop'];
+const titleCase = (s) => `${s[0].toUpperCase()}${s.slice(1)}`;
+
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
 function Delta({ d }) {
@@ -37,40 +41,43 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
   // Average performance per combination, from the daily pre-measured snapshot —
   // so this normally resolves on the first request instead of running a live
   // PageSpeed call per page.
-  const [perf, setPerf] = useState({}); // id -> score | null; undefined = loading
-  const [perfAt, setPerfAt] = useState({}); // id -> when that score was measured
-  const [perfStale, setPerfStale] = useState({}); // id -> re-measure failed, showing the old score
-  const [perfError, setPerfError] = useState({}); // id -> why there is no score at all
-  const [strategy, setStrategy] = useState(null); // 'desktop' | 'mobile', per the server
+  // One request per combination returns BOTH profiles, so a single poll drives
+  // both scores. undefined = still loading.
+  const [perf, setPerf] = useState({}); // id -> { [strategy]: { score, at, stale, error } }
   const live = useRef({ cancelled: false, timers: [] });
   const [sort, setSort] = useState({ key: 'leads', dir: 'desc' });
   const [teamFilter, setTeamFilter] = useState('all'); // 'all' | TEAMS.MIGRATE | TEAMS.MANAGE
 
   const loadPerf = useCallback((id, { force = false } = {}) => {
     setPerf((s) => ({ ...s, [id]: undefined }));
-    setPerfError((e) => ({ ...e, [id]: null }));
     const step = (attempt) => {
       api
         .comboPerf(id, force && attempt === 0)
         .then((d) => {
           if (live.current.cancelled) return;
-          if (d.status === 'pending') {
+          if (d.anyPending) {
             live.current.timers.push(setTimeout(() => step(attempt + 1), pollDelay(attempt, 4000)));
             return;
           }
-          if (d.strategy) setStrategy(d.strategy);
-          setPerfAt((t) => ({ ...t, [id]: d.measuredAt ?? null }));
-          setPerfStale((f) => ({ ...f, [id]: d.stale ? d.staleReason || true : false }));
-          setPerfError((e) => ({
-            ...e,
-            [id]: d.status === 'failed' ? d.error || 'PageSpeed returned no score' : null,
-          }));
-          setPerf((s) => ({ ...s, [id]: d.perf ?? null }));
+          const byProfile = {};
+          for (const s of PROFILES) {
+            const r = d.strategies?.[s];
+            byProfile[s] = {
+              score: r && r.status === 'ready' ? r.perf ?? null : null,
+              at: r?.measuredAt ?? null,
+              stale: r?.stale ? r.staleReason || true : false,
+              error: r?.status === 'failed' ? r.error || 'PageSpeed returned no score' : null,
+            };
+          }
+          setPerf((s) => ({ ...s, [id]: byProfile }));
         })
         .catch((err) => {
           if (live.current.cancelled) return;
-          setPerfError((e) => ({ ...e, [id]: err.message || 'request failed' }));
-          setPerf((s) => ({ ...s, [id]: null }));
+          const msg = err.message || 'request failed';
+          setPerf((s) => ({
+            ...s,
+            [id]: Object.fromEntries(PROFILES.map((p) => [p, { score: null, at: null, stale: false, error: msg }])),
+          }));
         });
     };
     step(0);
@@ -80,9 +87,6 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
     const bag = { cancelled: false, timers: [] };
     live.current = bag;
     setPerf({});
-    setPerfAt({});
-    setPerfStale({});
-    setPerfError({});
     for (const r of rows) loadPerf(r.id);
     return () => {
       bag.cancelled = true;
@@ -93,21 +97,28 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
   const refreshAllPerf = () => {
     for (const r of rows) loadPerf(r.id, { force: true });
   };
+  const at = (id, s) => perf[id]?.[s];
   const perfBusy = rows.some((r) => perf[r.id] === undefined);
-  const perfStaleAny = rows.map((r) => perfStale[r.id]).find(Boolean) ?? false;
-  const perfMeasuredAt = Object.values(perfAt).reduce((a, t) => (t && (a == null || t > a) ? t : a), null);
+  const perfStaleAny = rows.flatMap((r) => PROFILES.map((s) => at(r.id, s)?.stale)).find(Boolean) ?? false;
+  const perfMeasuredAt = rows
+    .flatMap((r) => PROFILES.map((s) => at(r.id, s)?.at))
+    .reduce((a, t) => (t && (a == null || t > a) ? t : a), null);
 
   const comboById = useMemo(() => new Map(combos.map((c) => [c.id, c])), [combos]);
 
   const sortCols = [
     { key: 'name', label: 'Name', get: (r) => r.name },
     { key: 'leads', label: 'Leads', get: (r) => (r.leads || 0) + (r.ppcLeads || 0) },
-    { key: 'position', label: 'Avg. position', get: (r) => r.position },
-    { key: 'impressions', label: 'Impressions', get: (r) => r.impressions },
     { key: 'clicks', label: 'Organic clicks', get: (r) => r.clicks },
-    { key: 'views', label: 'Views', get: (r) => r.views },
+    { key: 'impressions', label: 'Impressions', get: (r) => r.impressions },
+    { key: 'position', label: 'Avg. position', get: (r) => r.position },
+    { key: 'activeUsers', label: 'Active users', get: (r) => r.activeUsers },
     { key: 'bounceRate', label: 'Bounce rate', get: (r) => r.bounceRate },
-    { key: 'perf', label: 'Perf.', get: (r) => perf[r.id] },
+    ...PROFILES.map((s) => ({
+      key: `perf_${s}`,
+      label: `Perf. ${titleCase(s)}`,
+      get: (r) => at(r.id, s)?.score,
+    })),
   ];
 
   const byTeam = useMemo(() => {
@@ -158,8 +169,8 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
           <PerfRefresh
             inHeader
             measuredAt={perfMeasuredAt}
-            strategy={strategy}
-            scope={`all ${rows.length} combinations — takes several minutes`}
+            strategy={PROFILES.join(' + ')}
+            scope={`all ${rows.length} combinations on mobile and desktop — takes many minutes`}
             busy={perfBusy}
             stale={perfStaleAny}
             onClick={refreshAllPerf}
@@ -225,11 +236,15 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
                 {r.ppcLeads > 0 && <span className="tile-ppc-chip">{r.ppcLeads} PPC</span>}
               </div>
 
+              {/* Search Console, then GA4, then PageSpeed — the same grouping
+                  the page table uses. The two performance scores share one cell
+                  so the grid stays three across and each row of the tile maps to
+                  one data source. */}
               <div className="tile-stats-grid">
-                <Stat label="Position" value={r.position} display={r.position || '—'} delta={dl.position} compare={compare} />
-                <Stat label="Impressions" value={r.impressions} delta={dl.impressions} compare={compare} />
                 <Stat label="Clicks" value={r.clicks} delta={dl.clicks} compare={compare} />
-                <Stat label="Views" value={r.views} delta={dl.views} compare={compare} />
+                <Stat label="Impressions" value={r.impressions} delta={dl.impressions} compare={compare} />
+                <Stat label="Position" value={r.position} display={r.position || '—'} delta={dl.position} compare={compare} />
+                <Stat label="Active users" value={r.activeUsers} delta={dl.activeUsers} compare={compare} />
                 <Stat
                   label="Bounce"
                   value={r.bounceRate}
@@ -238,19 +253,26 @@ export default function Overview({ rows, combos, onOpen, compare = false }) {
                   compare={compare}
                 />
                 <div className="tile-stat-cell">
+                  {/* The whole tile drills into the combination, so the refresh
+                      control must not navigate. */}
                   <div className="tile-stat-val perf-wrap" onClick={(e) => e.stopPropagation()}>
-                    <PerfCell score={perf[r.id]} error={perfError[r.id]} />
+                    {PROFILES.map((s, i) => (
+                      <span key={s} className="perf-pair-item">
+                        {i > 0 && <span className="perf-pair-sep">/</span>}
+                        <PerfCell score={at(r.id, s)?.score} error={at(r.id, s)?.error} strategy={s} />
+                      </span>
+                    ))}
                     {perf[r.id] !== undefined && (
                       <PerfRefresh
-                        measuredAt={perfAt[r.id]}
-                        strategy={strategy}
-                        scope="this combination"
-                        stale={perfStale[r.id]}
+                        measuredAt={perfMeasuredAt}
+                        strategy={PROFILES.join(' + ')}
+                        scope="this combination, on mobile and desktop"
+                        stale={PROFILES.map((s) => at(r.id, s)?.stale).find(Boolean) ?? false}
                         onClick={() => loadPerf(r.id, { force: true })}
                       />
                     )}
                   </div>
-                  <div className="tile-stat-label">Perf.</div>
+                  <div className="tile-stat-label">Perf. M / D</div>
                 </div>
               </div>
             </div>

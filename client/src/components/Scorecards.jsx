@@ -26,7 +26,14 @@ function Delta({ d }) {
 export default function Scorecards({ data }) {
   const { totals, deltas, cwv } = data;
   const cards = [
-    { label: 'Page views', value: fmt(totals.pageViews ?? 0), d: null, sub: 'all visits to these pages' },
+    {
+      label: 'Active users',
+      value: fmt(totals.activeUsers ?? 0),
+      d: null,
+      // Users are de-duplicated per page, so a visitor who read three of these
+      // pages counts three times — an upper bound, not a unique-visitor total.
+      sub: 'summed across these pages',
+    },
     { label: 'Sessions', value: fmt(totals.sessions), d: deltas.sessions, sub: 'entries via these pages' },
     { label: 'Organic Leads', value: fmt(totals.leads), d: deltas.leads, sub: 'HubSpot MQLs for this combination' },
     { label: 'Organic clicks', value: fmt(totals.clicks), d: deltas.clicks },

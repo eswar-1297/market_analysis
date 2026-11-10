@@ -80,9 +80,15 @@ export async function ga4Page(url, start, end, country = 'US') {
   );
 }
 
-// Total page VIEWS for a page (all visits, not just entries) — uses pagePath,
-// which keeps the trailing slash our URLs have.
-export async function ga4PageViews(url, start, end, country = 'US') {
+// Active users for a page, plus the page's session count. Uses pagePath (which
+// keeps the trailing slash our URLs have), matching GA4's "Pages and screens"
+// report — the same lens ga4PageEngagement() uses for bounce rate, so both GA4
+// columns on a row are measured the same way.
+//
+// Active users are DE-DUPLICATED, so they are not additive across dates or
+// pages: this must stay a period-total report with no `date` dimension. Summing
+// daily user counts would badly overcount.
+export async function ga4PageUsers(url, start, end, country = 'US') {
   const pageFilter = {
     filter: { fieldName: 'pagePath', stringFilter: { matchType: 'EXACT', value: pathOf(url) } },
   };
@@ -102,12 +108,23 @@ export async function ga4PageViews(url, start, end, country = 'US') {
     property: `properties/${config.ga4PropertyId}`,
     requestBody: {
       dateRanges: [{ startDate: start, endDate: end }],
-      metrics: [{ name: 'screenPageViews' }],
+      // activeUsers is what GA4's own "Pages and screens" report shows as
+      // "Active users", so the cell matches the number read off that screen.
+      // `sessions` rides along because it is the correct weight for averaging
+      // bounce rate across pages: GA4's bounceRate is session-scoped
+      // (1 - engaged sessions / sessions), so sessions is its exact denominator.
+      // Users are de-duplicated and would weight a sticky page the same as a
+      // one-visit page.
+      metrics: [{ name: 'activeUsers' }, { name: 'sessions' }],
       dimensionFilter,
     },
   });
   const row = resp.data.rows && resp.data.rows[0];
-  return row ? Number(row.metricValues[0].value || 0) : 0;
+  const m = row ? row.metricValues : null;
+  return {
+    activeUsers: m ? Number(m[0].value || 0) : 0,
+    pageSessions: m ? Number(m[1].value || 0) : 0,
+  };
 }
 
 // PPC leads for a page = paid-search conversions (key events) attributed to

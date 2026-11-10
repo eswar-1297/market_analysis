@@ -128,7 +128,7 @@ export function buildMcpServer() {
   server.tool(
     'combinations_overview',
     'High-level CloudFuze marketing overview: every migration combination (e.g. Slack to ' +
-      'Teams) with its organic search metrics (impressions, clicks, avg position, views, ' +
+      'Teams) with its organic search metrics (impressions, clicks, avg position, active users, ' +
       'bounce) and HubSpot organic leads. Read-only. Good starting point for "how is X doing".',
     {
       startDate: z.string().describe('YYYY-MM-DD'),

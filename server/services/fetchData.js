@@ -5,7 +5,7 @@
 
 import { modeFor } from '../config.js';
 import { mockPage } from '../connectors/mock.js';
-import { ga4Page, ga4PageViews, ga4PageEngagement } from '../connectors/ga4.js';
+import { ga4Page, ga4PageUsers, ga4PageEngagement } from '../connectors/ga4.js';
 import { searchConsolePage } from '../connectors/searchConsole.js';
 import { adsPage } from '../connectors/googleAds.js';
 
@@ -43,24 +43,38 @@ export async function fetchPageAll(page, start, end, country = 'US', includeView
     withFallback('ads', () => adsPage(url, start, end, country), sample.ads, errors),
   ]);
 
-  // Page views (total pageviews) + bounce rate — fetched per period for the
-  // table + comparison. Both are pagePath-scoped to match GA4's Pages report.
-  let views = null;
+  // Active users + bounce rate — fetched per period for the table + comparison.
+  // Both are pagePath-scoped to match GA4's Pages report. `pageSessions` comes
+  // along as the bounce-rate weight (see ga4PageUsers); it is never displayed.
+  //
+  // The two reports stay SEPARATE, each with its own catch: the GA4 Data API
+  // rejects a whole report on one bad metric, so merging them would mean a
+  // failure in either metric silently blanks both columns at once.
+  let activeUsers = null;
+  let pageSessions = null;
   let bounceRate = null;
   if (includeViews) {
     const sSessions = sample.ga4.reduce((a, d) => a + d.sessions, 0);
     const sEng = sample.ga4.reduce((a, d) => a + d.engagementRate, 0) / (sample.ga4.length || 1);
-    const sampleViews = Math.round(sSessions * 1.4);
+    // Users are de-duplicated over the whole period, so a plausible sample value
+    // is well below the session total and must NOT scale linearly with the range
+    // the way a per-day ratio would.
+    const sampleUsers = Math.round(sSessions * 0.35);
     const sampleBounce = Number((1 - sEng).toFixed(3));
     if (modeFor('ga4') === 'live') {
-      const [v, e] = await Promise.all([
-        ga4PageViews(url, start, end, country).catch(() => sampleViews),
+      const [u, e] = await Promise.all([
+        ga4PageUsers(url, start, end, country).catch(() => ({
+          activeUsers: sampleUsers,
+          pageSessions: sSessions,
+        })),
         ga4PageEngagement(url, start, end, country).catch(() => ({ bounceRate: sampleBounce })),
       ]);
-      views = v;
+      activeUsers = u.activeUsers;
+      pageSessions = u.pageSessions;
       bounceRate = e.bounceRate;
     } else {
-      views = sampleViews;
+      activeUsers = sampleUsers;
+      pageSessions = sSessions;
       bounceRate = sampleBounce;
     }
   }
@@ -71,7 +85,11 @@ export async function fetchPageAll(page, start, end, country = 'US', includeView
     ga4: ga4.data,
     searchConsole: sc.data,
     ads: ads.data,
-    views,
+    activeUsers,
+    // Weight for averaging bounce rate across a set of pages. Named apart from
+    // the landingPage-scoped `sessions` in the ga4 series above, which counts
+    // entries rather than every session that touched the page.
+    pageSessions,
     bounceRate,
     modes: { ga4: ga4.mode, searchConsole: sc.mode, ads: ads.mode },
     errors,

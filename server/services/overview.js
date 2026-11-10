@@ -1,6 +1,6 @@
 // Aggregated overview across ALL combinations. Uses a few batch queries (not
 // per-page) so the default landing view loads fast:
-//   - GA4 (pagePath): views + bounce rate
+//   - GA4 (pagePath): active users + sessions (the bounce weight) + bounce rate
 //   - Search Console (page): clicks, impressions, position
 //   - HubSpot: leads (mandatory contacts bucketed by source->destination combo)
 // Then rolls each page up to its combination.
@@ -37,8 +37,12 @@ function pathOf(url) {
     return url;
   }
 }
+// bounceW/bounceS average bounce rate across a combination's pages, weighted by
+// each page's SESSION count — GA4's bounceRate is session-scoped, so sessions is
+// its exact denominator. (Active users are de-duplicated and would weight a
+// sticky page the same as a one-visit page.)
 function blankAgg() {
-  return { views: 0, clicks: 0, impressions: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 };
+  return { activeUsers: 0, clicks: 0, impressions: 0, posW: 0, posI: 0, bounceW: 0, bounceS: 0 };
 }
 function finalize(combos, agg) {
   return combos.map((c) => {
@@ -50,8 +54,8 @@ function finalize(combos, agg) {
       position: a.posI ? Number((a.posW / a.posI).toFixed(1)) : 0,
       impressions: Math.round(a.impressions),
       clicks: Math.round(a.clicks),
-      views: Math.round(a.views),
-      bounceRate: a.bounceV ? Number((a.bounceW / a.bounceV).toFixed(3)) : 0,
+      activeUsers: Math.round(a.activeUsers),
+      bounceRate: a.bounceS ? Number((a.bounceW / a.bounceS).toFixed(3)) : 0,
       leads: 0, // filled in by getOverview from HubSpot
     };
   });
@@ -84,7 +88,7 @@ export async function overviewLive(combos, start, end, country = 'US') {
       requestBody: {
         dateRanges: [{ startDate: start, endDate: end }],
         dimensions: [{ name: 'pagePath' }],
-        metrics: [{ name: 'screenPageViews' }, { name: 'bounceRate' }],
+        metrics: [{ name: 'activeUsers' }, { name: 'sessions' }, { name: 'bounceRate' }],
         dimensionFilter: withGeo({ filter: { fieldName: 'pagePath', inListFilter: { values: [...allPaths] } } }),
         limit: 1000,
       },
@@ -112,11 +116,12 @@ export async function overviewLive(combos, start, end, country = 'US') {
     const id = pathToCombo[row.dimensionValues[0].value];
     if (!id) continue;
     const a = bump(id);
-    const views = Number(row.metricValues[0].value || 0);
-    const bounce = Number(row.metricValues[1].value || 0);
-    a.views += views;
-    a.bounceW += bounce * views;
-    a.bounceV += views;
+    const activeUsers = Number(row.metricValues[0].value || 0);
+    const sessions = Number(row.metricValues[1].value || 0);
+    const bounce = Number(row.metricValues[2].value || 0);
+    a.activeUsers += activeUsers;
+    a.bounceW += bounce * sessions;
+    a.bounceS += sessions;
   }
   for (const row of scRes.data.rows || []) {
     const id = urlToCombo[row.keys[0]];
@@ -143,14 +148,16 @@ export function overviewMock(combos, start, end, country = 'US') {
       const clicks = m.searchConsole.reduce((s, d) => s + d.clicks, 0);
       const impr = m.searchConsole.reduce((s, d) => s + d.impressions, 0);
       const posAvg = m.searchConsole.reduce((s, d) => s + d.position, 0) / (m.searchConsole.length || 1);
-      const views = Math.round(sessions * 1.4);
-      a.views += views;
+      // Users are de-duplicated over the period, so sample users sit well below
+      // the session total rather than above it the way pageviews did.
+      const activeUsers = Math.round(sessions * 0.35);
+      a.activeUsers += activeUsers;
       a.clicks += clicks;
       a.impressions += impr;
       a.posW += posAvg * impr;
       a.posI += impr;
-      a.bounceW += (1 - eng) * views;
-      a.bounceV += views;
+      a.bounceW += (1 - eng) * sessions;
+      a.bounceS += sessions;
     }
     agg[c.id] = a;
   }
@@ -180,7 +187,7 @@ export function withDeltas(curRows, prevRows) {
         position: pctChange(r.position, p.position || 0, true, true), // average
         impressions: pctChange(r.impressions, p.impressions || 0),
         clicks: pctChange(r.clicks, p.clicks || 0),
-        views: pctChange(r.views, p.views || 0),
+        activeUsers: pctChange(r.activeUsers, p.activeUsers || 0),
         bounceRate: pctChange(r.bounceRate, p.bounceRate || 0, true, true), // rate
         leads: pctChange(r.leads, p.leads || 0),
         ppcLeads: pctChange(r.ppcLeads, p.ppcLeads || 0),
@@ -190,7 +197,7 @@ export function withDeltas(curRows, prevRows) {
 }
 
 export async function getOverview(combos, start, end, country) {
-  // GA4/Search Console rows (views, bounce, clicks, impressions, position).
+  // GA4/Search Console rows (active users, bounce, clicks, impressions, position).
   let rows;
   let source;
   let gaError;

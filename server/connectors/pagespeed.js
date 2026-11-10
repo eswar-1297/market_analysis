@@ -33,11 +33,17 @@ const CACHE_FILE = path.join(__dirname, '..', '..', 'data', '.cache', 'pagespeed
 // 07:00 run doesn't re-measure the whole site on the next boot.
 const SNAPSHOT_TTL = 36 * 60 * 60 * 1000;
 // Any measurement deadline is guesswork, and guessing low is what made the column
-// flap: the original 25s sat under the median (measured across the site a call
-// takes 15s-55s, median ~30s, p90 ~48s), so half of all measurements were aborted
-// seconds before they would have returned. Nothing waits on this — the request
-// returns "pending" at once and the client polls — so the ceiling can be generous.
-const FETCH_TIMEOUT_MS = 120000;
+// flap: the original 25s sat under the median, so half of all measurements were
+// aborted seconds before they would have returned. Nothing waits on this — the
+// request returns "pending" at once and the client polls — so the ceiling can be
+// generous.
+//
+// Raised from 120s when mobile was added. The last desktop snapshot shows a
+// low-median/fat-tail distribution (median call ~10s, mean ~22s) with a handful
+// of pages past 120s, and mobile renders are slower still — at the old ceiling
+// those pages abort on both the first attempt and the retry, leaving a permanent
+// "—" in the mobile column.
+const FETCH_TIMEOUT_MS = 240000;
 // Paid landing pages are the heavy ones (43-55s observed) and get NO measurement
 // deadline. This guard is not a budget: it exists only so a wedged socket cannot
 // keep a URL in `inflight` for ever, which would stop the daily run from ever
@@ -57,42 +63,64 @@ export function setUnlimitedUrls(getUrls) {
     }
   };
 }
-// Desktop or mobile. PageSpeed treats these as two separate measurements, so a
-// stored score is only comparable to others taken with the SAME profile — hence
-// it's recorded alongside every reading and checked on load.
-const STRATEGY = config.pagespeedStrategy;
-const MAX_CONCURRENT = 4; // PageSpeed is rate-limited; queue the rest
+// PageSpeed treats mobile and desktop as two separate measurements whose numbers
+// are NOT comparable, so both are measured and stored independently and every
+// reading records which profile produced it. A score is only ever shown under the
+// profile it was taken with.
+export const STRATEGIES = ['mobile', 'desktop'];
+// The profile used where a single number is still required (server/check.js, and
+// the figure /api/meta reports). Configurable, defaults to desktop.
+const PRIMARY = STRATEGIES.includes(config.pagespeedStrategy) ? config.pagespeedStrategy : 'desktop';
+
+// Every per-URL map below is keyed by (url, strategy), never by url alone —
+// otherwise one profile's reading, failure or in-flight call would be handed to
+// the other. The separator cannot occur in a strategy name, so the key splits
+// back unambiguously.
+const ck = (url, strategy) => `${strategy}::${url}`;
+
+const MAX_CONCURRENT = 6; // PageSpeed is rate-limited; queue the rest
 // After a failed measurement, don't try that page again for a while. Without this
 // a URL PageSpeed refuses gets re-fetched on every 3s poll, which is both useless
 // and the fastest way to get rate-limited.
 const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 
-const cache = new Map(); // url -> { at: ms, data, strategy }
-const inflight = new Map(); // url -> Promise, so concurrent asks share one call
-// url -> { at, message } for the most recent failed fetch, cleared by a success.
+const cache = new Map(); // ck -> { at: ms, data, strategy }
+const inflight = new Map(); // ck -> Promise, so concurrent asks share one call
+// ck -> { at, message } for the most recent failed fetch, cleared by a success.
 // Kept (rather than consumed on read) so a reading can be reported as stale for as
 // long as the newest attempt to replace it is a failure.
 const lastError = new Map();
-const forced = new Set(); // urls the user asked to re-measure, until it lands
+const forced = new Set(); // cks the user asked to re-measure, until they land
 
 // --- disk persistence -------------------------------------------------------
 (function loadFromDisk() {
   try {
     const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    // v2 is keyed by `${strategy}::${url}`. v1 was keyed by url alone, back when
+    // only one profile was measured; each of its entries still records the
+    // profile it was taken with, so it is re-filed under that profile rather
+    // than thrown away. An entry with no strategy cannot be placed safely —
+    // guessing would risk showing a desktop number under the mobile heading —
+    // so it is dropped and re-measured.
+    const entries = raw && raw.version === 2 ? raw.entries || {} : raw || {};
+    const byStrategy = {};
     let dropped = 0;
-    for (const [url, entry] of Object.entries(raw)) {
+    for (const [key, entry] of Object.entries(entries)) {
       if (!entry || typeof entry.at !== 'number' || !entry.data) continue;
-      // A score measured under the other profile is not a stale version of this
-      // one — it's a different number. Discard it so the page is re-measured
-      // instead of the column mixing desktop and mobile readings.
-      if (entry.strategy !== STRATEGY) {
+      if (!STRATEGIES.includes(entry.strategy)) {
         dropped++;
         continue;
       }
-      cache.set(url, entry);
+      // Re-derive the key so a v1 file lands in the v2 layout.
+      const url = key.includes('::') ? key.slice(key.indexOf('::') + 2) : key;
+      cache.set(ck(url, entry.strategy), entry);
+      byStrategy[entry.strategy] = (byStrategy[entry.strategy] || 0) + 1;
     }
-    if (cache.size) console.log(`[pagespeed] loaded ${cache.size} cached ${STRATEGY} score(s) from disk`);
-    if (dropped) console.log(`[pagespeed] discarded ${dropped} score(s) from a different profile — will re-measure for ${STRATEGY}`);
+    if (cache.size) {
+      const summary = STRATEGIES.map((s) => `${byStrategy[s] || 0} ${s}`).join(', ');
+      console.log(`[pagespeed] loaded ${cache.size} cached score(s) from disk (${summary})`);
+    }
+    if (dropped) console.log(`[pagespeed] discarded ${dropped} score(s) with no usable profile — will re-measure`);
   } catch {
     /* no cache yet (or unreadable) — start empty */
   }
@@ -106,7 +134,7 @@ function saveSoon() {
     saveTimer = null;
     try {
       fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-      fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(cache)));
+      fs.writeFileSync(CACHE_FILE, JSON.stringify({ version: 2, entries: Object.fromEntries(cache) }));
     } catch (e) {
       console.warn('[pagespeed] could not write cache file:', e.message);
     }
@@ -118,15 +146,19 @@ function percentile(metric) {
   return metric && typeof metric.percentile === 'number' ? metric.percentile : null;
 }
 
-async function fetchFresh(url) {
+async function fetchFresh(url, strategy) {
   const api = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
   api.searchParams.set('url', url);
   api.searchParams.set('category', 'performance');
-  api.searchParams.set('strategy', STRATEGY);
+  api.searchParams.set('strategy', strategy);
   if (config.pagespeedApiKey) api.searchParams.set('key', config.pagespeedApiKey);
 
   const budget = unlimitedUrls().has(url) ? WEDGE_GUARD_MS : FETCH_TIMEOUT_MS;
-  const res = await fetch(api, { signal: AbortSignal.timeout(budget) });
+  // One deadline covering the response body as well as the connection: a
+  // Lighthouse payload is multi-MB, and a signal passed only to fetch() leaves
+  // the body read able to hang indefinitely.
+  const signal = AbortSignal.timeout(budget);
+  const res = await fetch(api, { signal });
   if (!res.ok) throw new Error(`PageSpeed ${res.status}`);
   const json = await res.json();
 
@@ -167,23 +199,24 @@ function runQueued(fn) {
   });
 }
 
-// One in-flight fetch per URL; stores and persists on success.
-function refresh(url) {
-  const existing = inflight.get(url);
+// One in-flight fetch per (url, strategy); stores and persists on success.
+function refresh(url, strategy) {
+  const key = ck(url, strategy);
+  const existing = inflight.get(key);
   if (existing) return existing;
-  const p = runQueued(() => fetchFresh(url))
+  const p = runQueued(() => fetchFresh(url, strategy))
     .then((data) => {
-      cache.set(url, { at: Date.now(), data, strategy: STRATEGY });
-      lastError.delete(url); // a good reading supersedes any earlier failure
+      cache.set(key, { at: Date.now(), data, strategy });
+      lastError.delete(key); // a good reading supersedes any earlier failure
       saveSoon();
       return data;
     })
     .catch((e) => {
-      lastError.set(url, { at: Date.now(), message: e.message });
+      lastError.set(key, { at: Date.now(), message: e.message });
       throw e;
     })
-    .finally(() => inflight.delete(url));
-  inflight.set(url, p);
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
   return p;
 }
 
@@ -202,17 +235,20 @@ function refresh(url) {
 // `{ force: true }` is the refresh button, and the single exception: the user
 // asked for a new number, so it reports 'pending' until the NEW reading lands
 // rather than handing back the old one as ready and looking like a no-op click.
-export function pagespeedSnapshot(url, { force = false } = {}) {
-  const hit = cache.get(url);
-  const err = lastError.get(url);
+export function pagespeedSnapshot(url, { force = false, strategy = PRIMARY } = {}) {
+  const key = ck(url, strategy);
+  const hit = cache.get(key);
+  const err = lastError.get(key);
 
-  if (force && !forced.has(url)) {
-    forced.add(url);
-    refresh(url)
+  if (force && !forced.has(key)) {
+    forced.add(key);
+    refresh(url, strategy)
       .catch(() => {})
-      .finally(() => forced.delete(url));
+      .finally(() => forced.delete(key));
   }
-  if (forced.has(url)) return { status: 'pending', previous: hit?.data ?? null, at: hit?.at ?? null };
+  if (forced.has(key)) {
+    return { status: 'pending', strategy, previous: hit?.data ?? null, at: hit?.at ?? null };
+  }
 
   if (hit) {
     // A failure recorded AFTER this reading means we tried to replace it and
@@ -221,6 +257,7 @@ export function pagespeedSnapshot(url, { force = false } = {}) {
     const failedSince = Boolean(err && err.at > hit.at);
     return {
       status: 'ready',
+      strategy,
       data: hit.data,
       at: hit.at,
       stale: failedSince,
@@ -231,23 +268,29 @@ export function pagespeedSnapshot(url, { force = false } = {}) {
   // Never measured. Report a recent failure as a failure — the column shows "—"
   // with the reason — instead of starting another fetch. Checking this BEFORE
   // refreshing is what stops a failing URL being re-fetched on every poll.
-  if (err && !inflight.has(url) && Date.now() - err.at < FAILURE_COOLDOWN_MS) {
-    return { status: 'failed', error: err.message };
+  if (err && !inflight.has(key) && Date.now() - err.at < FAILURE_COOLDOWN_MS) {
+    return { status: 'failed', strategy, error: err.message };
   }
 
-  const p = refresh(url);
+  const p = refresh(url, strategy);
   p.catch(() => {}); // handled by the poller; don't crash on an unhandled rejection
-  return { status: 'pending', previous: null, at: null };
+  return { status: 'pending', strategy, previous: null, at: null };
+}
+
+// Every profile's state for one page, which is what the Perf. columns render.
+export function pagespeedSnapshotAll(url, { force = false } = {}) {
+  return Object.fromEntries(STRATEGIES.map((s) => [s, pagespeedSnapshot(url, { force, strategy: s })]));
 }
 
 // Blocking read — still used anywhere a score is needed as part of a response.
-export async function pagespeedPage(url) {
-  const hit = cache.get(url);
-  if (!hit) return refresh(url); // cold — nothing to serve but the live call
+export async function pagespeedPage(url, strategy = PRIMARY) {
+  const key = ck(url, strategy);
+  const hit = cache.get(key);
+  if (!hit) return refresh(url, strategy); // cold — nothing to serve but the live call
   // Same rule as pagespeedSnapshot: always hand back what we have. If it predates
   // the snapshot window, replace it behind the scenes — nobody should wait ~30s
   // for a number that barely moves, and a failed refresh just keeps the old value.
-  if (Date.now() - hit.at >= SNAPSHOT_TTL) refresh(url).catch(() => {});
+  if (Date.now() - hit.at >= SNAPSHOT_TTL) refresh(url, strategy).catch(() => {});
   return hit.data;
 }
 
@@ -263,9 +306,25 @@ function lastScheduledRun(hour) {
 // Newest measurement in the snapshot, so /api/meta can report how current the
 // Perf. column is.
 export function pagespeedSnapshotInfo() {
+  const byStrategy = {};
   let newest = null;
-  for (const entry of cache.values()) if (!newest || entry.at > newest) newest = entry.at;
-  return { pages: cache.size, measuredAt: newest, strategy: STRATEGY };
+  for (const entry of cache.values()) {
+    if (!newest || entry.at > newest) newest = entry.at;
+    const s = (byStrategy[entry.strategy] = byStrategy[entry.strategy] || { pages: 0, measuredAt: null });
+    s.pages++;
+    if (!s.measuredAt || entry.at > s.measuredAt) s.measuredAt = entry.at;
+  }
+  // `pages`/`measuredAt` describe the PRIMARY profile, so the headline figure
+  // stays a page count rather than a measurement count now that each page is
+  // measured twice. Per-profile detail sits alongside it.
+  const primary = byStrategy[PRIMARY] || { pages: 0, measuredAt: null };
+  return {
+    pages: primary.pages,
+    measuredAt: primary.measuredAt ?? newest,
+    strategy: PRIMARY,
+    strategies: STRATEGIES,
+    byStrategy,
+  };
 }
 
 // Pre-measure every page once a day at `hour` local time. `getUrls` is called at
@@ -290,7 +349,7 @@ export function schedulePagespeedRefresh(getUrls, hour) {
   const wait = msUntilRun();
   setTimeout(run, wait).unref?.();
   console.log(
-    `[pagespeed] daily ${STRATEGY} refresh scheduled for ${String(hour).padStart(2, '0')}:00 ` +
+    `[pagespeed] daily ${STRATEGIES.join(' + ')} refresh scheduled for ${String(hour).padStart(2, '0')}:00 ` +
       `(in ${Math.round(wait / 60000)} min)`
   );
 
@@ -305,12 +364,20 @@ export function schedulePagespeedRefresh(getUrls, hour) {
 // refresh everything, or the last scheduled run to only fill in what's missing).
 export function warmPagespeedCache(urls, { concurrency = 3, staleBefore = null } = {}) {
   const cutoff = staleBefore ?? Date.now() - SNAPSHOT_TTL;
-  const todo = [...new Set(urls)].filter((u) => {
-    const hit = cache.get(u);
-    return !hit || hit.at < cutoff;
-  });
+  // De-duplicate URLs BEFORE pairing them with profiles. The caller's list
+  // repeats any page that sits in more than one combination, and expanding
+  // first would measure those twice per profile. Composite string keys keep
+  // the pairs de-duplicable; objects would compare by reference and dedupe
+  // nothing.
+  const todo = [];
+  for (const u of new Set(urls)) {
+    for (const s of STRATEGIES) {
+      const hit = cache.get(ck(u, s));
+      if (!hit || hit.at < cutoff) todo.push(ck(u, s));
+    }
+  }
   if (!todo.length) return;
-  console.log(`[pagespeed] warming ${todo.length} page(s) in the background…`);
+  console.log(`[pagespeed] warming ${todo.length} measurement(s) across ${STRATEGIES.join(' + ')} in the background…`);
   runWarm(todo, concurrency, true);
 }
 
@@ -324,9 +391,13 @@ function runWarm(list, concurrency, allowRetry) {
   let done = 0;
   const next = () => {
     if (i >= list.length) return Promise.resolve();
-    const url = list[i++];
-    return refresh(url)
-      .catch(() => failed.push(url)) // one bad page must not stop the warm-up
+    // Entries are `${strategy}::${url}` composite keys.
+    const key = list[i++];
+    const sep = key.indexOf('::');
+    const strategy = key.slice(0, sep);
+    const url = key.slice(sep + 2);
+    return refresh(url, strategy)
+      .catch(() => failed.push(key)) // one bad page must not stop the warm-up
       .then(() => {
         if (++done === list.length) {
           if (failed.length && allowRetry) {

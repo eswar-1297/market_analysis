@@ -15,15 +15,28 @@ function reason(error) {
   return /abort|timeout/i.test(error) ? 'PageSpeed did not finish in time' : error;
 }
 
-export default function PerfCell({ score, error }) {
-  if (score === undefined) return <span className="spinner" title="Measuring…" />;
+// Scores below this are shown in red. Mobile scores run structurally lower than
+// desktop, so if the two ever need different thresholds this is the one place to
+// split; today the business rule is a single 97 for both.
+export const PERF_RED_BELOW = 97;
+
+export default function PerfCell({ score, error, strategy }) {
+  const label = strategy ? `${strategy[0].toUpperCase()}${strategy.slice(1)}` : null;
+  if (score === undefined) {
+    return <span className="spinner" title={label ? `Measuring ${label.toLowerCase()}…` : 'Measuring…'} />;
+  }
   if (score == null) {
     const why = reason(error);
+    const title = why ? `Could not measure${label ? ` (${label})` : ''} — ${why}` : undefined;
     return (
-      <span className={why ? 'perf-failed' : undefined} title={why ? `Could not measure — ${why}` : undefined}>
+      <span className={why ? 'perf-failed' : undefined} title={title}>
         —
       </span>
     );
   }
-  return <span className={score < 97 ? 'perf-low' : ''}>{score}</span>;
+  return (
+    <span className={score < PERF_RED_BELOW ? 'perf-low' : ''} title={label ? `${label} performance` : undefined}>
+      {score}
+    </span>
+  );
 }

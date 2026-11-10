@@ -14,8 +14,10 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import {
   pagespeedPage,
   pagespeedSnapshot,
+  pagespeedSnapshotAll,
   pagespeedSnapshotInfo, setUnlimitedUrls,
   schedulePagespeedRefresh,
+  STRATEGIES,
 } from './connectors/pagespeed.js';
 import { mockPage } from './connectors/mock.js';
 import { getOverview, withDeltas } from './services/overview.js';
@@ -591,7 +593,7 @@ function cwvStatus(metric, value) {
   if (value <= t[1]) return 'needs-improvement';
   return 'poor';
 }
-function cwvPayload(d) {
+function cwvPayload(d, strategy) {
   const statuses = [cwvStatus('lcp', d.lcp), cwvStatus('inp', d.inp), cwvStatus('cls', d.cls)];
   return {
     lcp: { value: d.lcp, status: statuses[0] },
@@ -602,10 +604,14 @@ function cwvPayload(d) {
     source: d.source,
     // Which PageSpeed profile this score is from, so the UI can say so and the
     // number can be lined up against the matching tab on pagespeed.web.dev.
-    strategy: config.pagespeedStrategy,
+    strategy,
     status: 'ready',
   };
 }
+
+// Mobile and desktop are separate, non-comparable measurements, so every
+// response carries each profile's own state. `anyPending` is what the client
+// polls on: it keeps asking until BOTH profiles have settled.
 app.get('/api/cwv', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'url required' });
@@ -614,26 +620,41 @@ app.get('/api/cwv', async (req, res) => {
     // we say so at once and the client polls, so the row spins while everything
     // else on the page is already rendered.
     if (modeFor('pagespeed') === 'live') {
-      const r = pagespeedSnapshot(url, { force: req.query.refresh === '1' });
-      if (r.status === 'pending') return res.json({ status: 'pending', previous: r.previous ?? null });
-      if (r.status === 'failed') return res.json({ status: 'failed', error: r.error });
-      // `stale` = the measurement failed and this is the previous reading, so the
-      // UI can say the re-measure didn't take instead of showing an unchanged
-      // number that looks like a no-op click.
-      return res.json({
-        ...cwvPayload(r.data),
-        measuredAt: r.at ?? null,
-        stale: r.stale ?? false,
-        staleReason: r.staleReason ?? null,
-      });
+      const all = pagespeedSnapshotAll(url, { force: req.query.refresh === '1' });
+      const strategies = {};
+      for (const [s, r] of Object.entries(all)) {
+        if (r.status === 'pending') strategies[s] = { status: 'pending', strategy: s, previous: r.previous ?? null };
+        else if (r.status === 'failed') strategies[s] = { status: 'failed', strategy: s, error: r.error };
+        else
+          strategies[s] = {
+            // `stale` = the measurement failed and this is the previous reading,
+            // so the UI can say the re-measure didn't take instead of showing an
+            // unchanged number that looks like a no-op click.
+            ...cwvPayload(r.data, s),
+            measuredAt: r.at ?? null,
+            stale: r.stale ?? false,
+            staleReason: r.staleReason ?? null,
+          };
+      }
+      return res.json({ strategies, anyPending: Object.values(strategies).some((r) => r.status === 'pending') });
     }
-    let d;
-    try {
-      d = await pagespeedPage(url);
-    } catch {
-      d = mockPage(url, '2020-01-01', '2020-01-28').pagespeed;
-    }
-    res.json(cwvPayload(d));
+    // No API key: measure each profile on its own. A single reading must never be
+    // reported under both headings — that is exactly the desktop-labelled-as-mobile
+    // mix-up the per-profile storage exists to prevent. Sample data may be shared,
+    // because it is not a measurement of anything.
+    const strategies = {};
+    await Promise.all(
+      STRATEGIES.map(async (s) => {
+        let d;
+        try {
+          d = await pagespeedPage(url, s);
+        } catch {
+          d = mockPage(url, '2020-01-01', '2020-01-28').pagespeed;
+        }
+        strategies[s] = cwvPayload(d, s);
+      })
+    );
+    res.json({ strategies, anyPending: false });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -652,42 +673,64 @@ app.get('/api/combo-perf', async (req, res) => {
     // built from a partial set.
     if (modeFor('pagespeed') === 'live') {
       const force = req.query.refresh === '1';
-      const results = combo.pages.map((pg) => pagespeedSnapshot(pg.url, { force }));
-      if (results.some((r) => r.status === 'pending')) return res.json({ status: 'pending' });
-      const ready = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
-      // Nothing measurable in the whole combination. Say WHY — the client shows a
-      // failure differently from a page still being measured, and an unexplained
-      // dash is the thing that made those two indistinguishable.
-      if (!ready.length) {
-        return res.json({
-          perf: null,
-          status: 'failed',
-          error: results.find((r) => r.error)?.error || 'PageSpeed returned no score for these pages',
-        });
+      const strategies = {};
+      for (const s of STRATEGIES) {
+        const results = combo.pages.map((pg) => pagespeedSnapshot(pg.url, { force, strategy: s }));
+        if (results.some((r) => r.status === 'pending')) {
+          strategies[s] = { status: 'pending', strategy: s };
+          continue;
+        }
+        const ready = results.filter((r) => r.status === 'ready' && typeof r.data.performanceScore === 'number');
+        // Nothing measurable in the whole combination. Say WHY — the client shows
+        // a failure differently from a page still being measured, and an
+        // unexplained dash is the thing that made those two indistinguishable.
+        if (!ready.length) {
+          strategies[s] = {
+            status: 'failed',
+            strategy: s,
+            perf: null,
+            error: results.find((r) => r.error)?.error || 'PageSpeed returned no score for these pages',
+          };
+          continue;
+        }
+        strategies[s] = {
+          status: 'ready',
+          strategy: s,
+          perf: Math.round(ready.reduce((a, r) => a + r.data.performanceScore, 0) / ready.length),
+          measuredAt: Math.max(...ready.map((r) => r.at ?? 0)) || null,
+          // True when at least one page fell back to its previous reading.
+          stale: ready.some((r) => r.stale),
+          staleReason: ready.find((r) => r.staleReason)?.staleReason ?? null,
+        };
       }
       return res.json({
-        perf: Math.round(ready.reduce((a, r) => a + r.data.performanceScore, 0) / ready.length),
-        measuredAt: Math.max(...ready.map((r) => r.at ?? 0)) || null,
-        strategy: config.pagespeedStrategy,
-        // True when at least one page fell back to its previous reading.
-        stale: ready.some((r) => r.stale),
-        staleReason: ready.find((r) => r.staleReason)?.staleReason ?? null,
-        status: 'ready',
+        id: combo.id,
+        strategies,
+        anyPending: Object.values(strategies).some((r) => r.status === 'pending'),
       });
     }
-    const scores = [];
+    // No API key — measure each profile separately; never reuse one reading for
+    // both (see /api/cwv).
+    const strategies = {};
     await Promise.all(
-      combo.pages.map(async (pg) => {
-        try {
-          const d = await pagespeedPage(pg.url);
-          if (typeof d.performanceScore === 'number') scores.push(d.performanceScore);
-        } catch {
-          /* skip page on error */
-        }
+      STRATEGIES.map(async (s) => {
+        const scores = [];
+        await Promise.all(
+          combo.pages.map(async (pg) => {
+            try {
+              const d = await pagespeedPage(pg.url, s);
+              if (typeof d.performanceScore === 'number') scores.push(d.performanceScore);
+            } catch {
+              /* skip page on error */
+            }
+          })
+        );
+        strategies[s] = scores.length
+          ? { status: 'ready', strategy: s, perf: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) }
+          : { status: 'failed', strategy: s, perf: null, error: 'PageSpeed returned no score for these pages' };
       })
     );
-    const perf = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
-    res.json({ id: combo.id, perf });
+    res.json({ id: combo.id, strategies, anyPending: false });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

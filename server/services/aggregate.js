@@ -108,7 +108,7 @@ const pageMetric = (p, src, f) => Math.round(total(p[src].map((d) => ({ value: d
 
 // Per-page % change vs the previous period.
 // A ZERO baseline is handled by kind:
-//   * counts (leads, clicks, impressions, views) — the new value IS the multiple,
+//   * counts (leads, clicks, impressions, active users) — the new value IS the multiple,
 //     so 0 -> 3 reads as 300% (tripled), not a capped 100%.
 //   * rates/averages (`isRate`: Avg. position, Bounce rate) — a zero baseline means
 //     there was no data last period, and "tripled" is meaningless for a rate, so
@@ -127,7 +127,10 @@ function pageSummary(p, prev) {
   // Leads are a combination-level metric (HubSpot contacts bucketed by
   // source->destination), so they are NOT shown per page here.
   const cur = {
-    views: p.views ?? 0,
+    activeUsers: p.activeUsers ?? 0,
+    // Not displayed — it is the weight the table uses to average bounce rate
+    // over whichever rows are visible. See ga4PageUsers().
+    pageSessions: p.pageSessions ?? 0,
     bounceRate: p.bounceRate ?? 0,
     clicks: pageMetric(p, 'searchConsole', 'clicks'),
     impressions: pageMetric(p, 'searchConsole', 'impressions'),
@@ -135,7 +138,7 @@ function pageSummary(p, prev) {
   };
   const pv = prev
     ? {
-        views: prev.views ?? 0,
+        activeUsers: prev.activeUsers ?? 0,
         bounceRate: prev.bounceRate ?? 0,
         clicks: pageMetric(prev, 'searchConsole', 'clicks'),
         impressions: pageMetric(prev, 'searchConsole', 'impressions'),
@@ -147,7 +150,7 @@ function pageSummary(p, prev) {
     label: p.label,
     ...cur,
     deltas: {
-      views: pctChange(cur.views, pv.views || 0),
+      activeUsers: pctChange(cur.activeUsers, pv.activeUsers || 0),
       bounceRate: pctChange(cur.bounceRate, pv.bounceRate || 0, true, true), // rate; lower is better
       clicks: pctChange(cur.clicks, pv.clicks || 0),
       impressions: pctChange(cur.impressions, pv.impressions || 0),
@@ -265,7 +268,10 @@ export function aggregateCombination(combo, currentPages, previousPages, leads =
       ppcConversions,
     },
     totals: {
-      pageViews: currentPages.reduce((a, p) => a + (p.views || 0), 0),
+      // Sum of per-page active users. Users are de-duplicated PER PAGE, so a
+      // visitor who read three of these pages is counted three times here —
+      // this is an upper bound on distinct people, not a unique-visitor total.
+      activeUsers: currentPages.reduce((a, p) => a + (p.activeUsers || 0), 0),
       sessions: Math.round(total(traffic)),
       leads: Math.round(total(leadsCur)),
       clicks: Math.round(total(clicks)),

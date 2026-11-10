@@ -6,6 +6,11 @@ import PerfCell from './PerfCell.jsx';
 import { pollDelay } from '../perfPoll.js';
 import { makeRanges, fmtRound, inRange, nextSort, sortRows } from '../rangeFilter.js';
 
+// Mobile and desktop are separate, non-comparable PageSpeed measurements, so the
+// table carries a column for each. Order matters only for display.
+const PROFILES = ['mobile', 'desktop'];
+const titleCase = (s) => `${s[0].toUpperCase()}${s.slice(1)}`;
+
 const fmt = (n) => (n == null ? '—' : n >= 1000 ? (n / 1e3).toFixed(1) + 'k' : String(n));
 
 function Delta({ d }) {
@@ -34,26 +39,31 @@ function Metric({ value, delta, display, compare }) {
 }
 
 // Sum/weight a set of page rows: totals for counts, impression-weighted
-// position, view-weighted bounce rate.
+// position, session-weighted bounce rate.
+//
+// Bounce rate is weighted by SESSIONS, not by active users: GA4's bounceRate is
+// session-scoped (1 - engaged sessions / sessions), so sessions is its exact
+// denominator. Users are de-duplicated over the period, which would weight a
+// page with many returning visitors the same as a page with one-time visitors.
 function aggregate(rows) {
   return rows.reduce(
     (a, p) => {
       a.impressions += p.impressions || 0;
       a.clicks += p.clicks || 0;
-      a.views += p.views || 0;
+      a.activeUsers += p.activeUsers || 0;
       a.posW += (p.position || 0) * (p.impressions || 0);
       a.posI += p.impressions || 0;
-      a.bounceW += (p.bounceRate || 0) * (p.views || 0);
-      a.bounceV += p.views || 0;
+      a.bounceW += (p.bounceRate || 0) * (p.pageSessions || 0);
+      a.bounceS += p.pageSessions || 0;
       return a;
     },
-    { impressions: 0, clicks: 0, views: 0, posW: 0, posI: 0, bounceW: 0, bounceV: 0 }
+    { impressions: 0, clicks: 0, activeUsers: 0, posW: 0, posI: 0, bounceW: 0, bounceS: 0 }
   );
 }
 
 // A cumulative summary row for a group (Organic / PPC) or the overall total.
-// The group's leads total sits in the dedicated Leads column, with a
-// growth/decline % beneath it when a comparison delta is provided.
+// The cells are positional and must stay in the same order as the header — see
+// COLUMN ORDER in PageTable below.
 function SummaryRow({ label, cls, rows, perfCells, leadsValue, leadsDelta }) {
   const t = aggregate(rows);
   return (
@@ -67,12 +77,14 @@ function SummaryRow({ label, cls, rows, perfCells, leadsValue, leadsDelta }) {
           </>
         )}
       </td>
-      <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
-      <td>{fmt(t.impressions)}</td>
       <td>{fmt(t.clicks)}</td>
-      <td>{fmt(t.views)}</td>
-      <td>{t.bounceV ? Math.round((t.bounceW / t.bounceV) * 100) + '%' : '—'}</td>
-      <td>{perfCells}</td>
+      <td>{fmt(t.impressions)}</td>
+      <td>{t.posI ? (t.posW / t.posI).toFixed(1) : '—'}</td>
+      <td>{fmt(t.activeUsers)}</td>
+      <td>{t.bounceS ? Math.round((t.bounceW / t.bounceS) * 100) + '%' : '—'}</td>
+      {PROFILES.map((s) => (
+        <td key={s}>{perfCells[s]}</td>
+      ))}
     </tr>
   );
 }
@@ -81,27 +93,27 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
   // Performance scores are pre-measured server-side once a day, so this normally
   // resolves on the first request; the cell still fills in asynchronously because
   // a page added since the last run has to be measured on the spot.
-  const [perf, setPerf] = useState({}); // url -> score | null (failed); undefined = loading
-  const [perfAt, setPerfAt] = useState({}); // url -> when that score was measured
-  const [perfStale, setPerfStale] = useState({}); // url -> re-measure failed, showing the old score
-  const [perfError, setPerfError] = useState({}); // url -> why there is no score at all
-  const [strategy, setStrategy] = useState(null); // 'desktop' | 'mobile', per the server
+  //
+  // One request per URL returns BOTH profiles, so a single poll drives both
+  // columns — there is no second timer to cancel and no shared "which profile is
+  // this?" state to flap between them.
+  //   perf[url] === undefined        -> still loading, both cells spin
+  //   perf[url][s].score === null    -> that profile has no score
+  const [perf, setPerf] = useState({}); // url -> { [strategy]: { score, at, stale, error } }
   // Shared cancel/timer bag for the in-flight polls, so unmounting or switching
   // combination stops them — including polls a row's own refresh button started.
   const live = useRef({ cancelled: false, timers: [] });
   const [filters, setFilters] = useState({}); // colKey -> { lo, hi, idx } | undefined
   const [sort, setSort] = useState(null); // { key, dir: 'asc' | 'desc' } | null
 
-  // Load ONE page's score. Normally the server answers from the daily snapshot at
-  // once; when it has to measure, it replies "pending" instead of holding the
-  // request open for ~20s, so we poll until the reading lands and that one cell
-  // spins while the rest of the table is already on screen.
+  // Load one page's scores. Normally the server answers from the daily snapshot
+  // at once; when it has to measure, it replies with anyPending instead of
+  // holding the request open, so we poll until both profiles land.
   // `force` is the row's own refresh button: it re-measures just this page. Only
   // the FIRST request forces — a poll that kept asking would start a new
-  // measurement every 3s and never settle.
+  // measurement every few seconds and never settle.
   const loadPerf = useCallback((url, { force = false } = {}) => {
     setPerf((s) => ({ ...s, [url]: undefined }));
-    setPerfError((e) => ({ ...e, [url]: null }));
     const step = (attempt) => {
       api
         .cwv(url, force && attempt === 0)
@@ -111,23 +123,29 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
           // a cold snapshot outlasts any fixed count, and giving up wrote a "—"
           // that read as a failure. The server ends a pending state itself, and
           // pollDelay eases the interval off while we wait.
-          if (d.status === 'pending') {
+          if (d.anyPending) {
             live.current.timers.push(setTimeout(() => step(attempt + 1), pollDelay(attempt)));
             return;
           }
-          if (d.strategy) setStrategy(d.strategy);
-          setPerfAt((t) => ({ ...t, [url]: d.measuredAt ?? null }));
-          setPerfStale((f) => ({ ...f, [url]: d.stale ? d.staleReason || true : false }));
-          setPerfError((e) => ({
-            ...e,
-            [url]: d.status === 'failed' ? d.error || 'PageSpeed returned no score' : null,
-          }));
-          setPerf((s) => ({ ...s, [url]: d.performanceScore ?? null }));
+          const byProfile = {};
+          for (const s of PROFILES) {
+            const r = d.strategies?.[s];
+            byProfile[s] = {
+              score: r && r.status === 'ready' ? r.performanceScore ?? null : null,
+              at: r?.measuredAt ?? null,
+              stale: r?.stale ? r.staleReason || true : false,
+              error: r?.status === 'failed' ? r.error || 'PageSpeed returned no score' : null,
+            };
+          }
+          setPerf((s) => ({ ...s, [url]: byProfile }));
         })
         .catch((err) => {
           if (live.current.cancelled) return;
-          setPerfError((e) => ({ ...e, [url]: err.message || 'request failed' }));
-          setPerf((s) => ({ ...s, [url]: null }));
+          const msg = err.message || 'request failed';
+          setPerf((s) => ({
+            ...s,
+            [url]: Object.fromEntries(PROFILES.map((p) => [p, { score: null, at: null, stale: false, error: msg }])),
+          }));
         });
     };
     step(0);
@@ -137,9 +155,6 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
     const bag = { cancelled: false, timers: [] };
     live.current = bag;
     setPerf({});
-    setPerfAt({});
-    setPerfStale({});
-    setPerfError({});
     for (const p of allPages) loadPerf(p.url);
     return () => {
       bag.cancelled = true;
@@ -153,27 +168,42 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
     for (const p of allPages) loadPerf(p.url, { force: true });
   };
   const perfBusy = allPages.some((p) => perf[p.url] === undefined);
+  const at = (url, s) => perf[url]?.[s];
   // PageSpeed does fail a page from time to time; when it does the server serves
   // the previous reading, and the button says so rather than looking like a no-op.
-  const perfStaleAny = allPages.map((p) => perfStale[p.url]).find(Boolean) ?? false;
+  const perfStaleAny = allPages.flatMap((p) => PROFILES.map((s) => at(p.url, s)?.stale)).find(Boolean) ?? false;
   // Newest reading on screen, for the button's "measured …" tooltip.
-  const perfMeasuredAt = Object.values(perfAt).reduce((a, t) => (t && (a == null || t > a) ? t : a), null);
+  const perfMeasuredAt = allPages
+    .flatMap((p) => PROFILES.map((s) => at(p.url, s)?.at))
+    .reduce((a, t) => (t && (a == null || t > a) ? t : a), null);
 
-  // Page leads sits in its own column (second), so it's declared separately from
-  // the metric columns but filters through exactly the same machinery.
+  // ---- COLUMN ORDER ---------------------------------------------------------
+  // Page | Page leads | Clicks | Impressions | Avg. position | Active users |
+  // Bounce rate | Perf (Mobile) | Perf (Desktop)
+  //
+  // Grouped by source so the eye can scan one system at a time: Search Console,
+  // then GA4, then PageSpeed. Everything below derives from this array, so a
+  // column added here flows into the header, the filters and the sort — but
+  // SummaryRow's cells are positional and must be kept in step by hand.
   const leadsCol = { key: 'leads', label: 'Page leads', get: (p) => p.leads, format: (v) => String(Math.round(v)) };
-
-  // Per-column range filters, applied from the column headers (same UI/logic as
-  // the overview table).
   const filterCols = [
-    { key: 'position', label: 'Avg. position', get: (p) => p.position, format: (v) => String(Math.round(v)) },
-    { key: 'impressions', label: 'Impressions', get: (p) => p.impressions, format: fmtRound },
     { key: 'clicks', label: 'Organic clicks', get: (p) => p.clicks, format: fmtRound },
-    { key: 'views', label: 'Views', get: (p) => p.views, format: fmtRound },
+    { key: 'impressions', label: 'Impressions', get: (p) => p.impressions, format: fmtRound },
+    { key: 'position', label: 'Avg. position', get: (p) => p.position, format: (v) => String(Math.round(v)) },
+    { key: 'activeUsers', label: 'Active users', get: (p) => p.activeUsers, format: fmtRound },
     { key: 'bounceRate', label: 'Bounce rate', get: (p) => p.bounceRate, format: (v) => Math.round(v * 100) + '%' },
-    { key: 'perf', label: 'Perf.', get: (p) => perf[p.url], format: (v) => String(Math.round(v)) },
+    ...PROFILES.map((s) => ({
+      key: `perf_${s}`,
+      label: `Perf. ${titleCase(s)}`,
+      strategy: s,
+      get: (p) => at(p.url, s)?.score,
+      format: (v) => String(Math.round(v)),
+    })),
   ];
   const allFilterCols = [leadsCol, ...filterCols];
+  // The one source of truth for how wide a full-width row is.
+  const COL_COUNT = 1 + allFilterCols.length;
+
   const ranges = useMemo(() => {
     const out = {};
     for (const c of allFilterCols) out[c.key] = makeRanges(allPages.map(c.get), c.format);
@@ -207,26 +237,25 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
   const ppcPages = pages.filter((p) => p.ppc);
   const hasBoth = organicPages.length > 0 && ppcPages.length > 0;
 
-  // Render one page's score. `error` distinguishes a page PageSpeed could not
-  // measure from one that is merely still being measured — both are a dash
-  // otherwise.
-  const renderPerf = (score, error) => <PerfCell score={score} error={error} />;
-
-  // Average performance score across a set of pages (lazy — spinner until at
-  // least one page's score has loaded).
-  const groupPerf = (rows) => {
-    const sc = rows.map((p) => perf[p.url]).filter((s) => typeof s === 'number');
-    const anyLoaded = rows.some((p) => perf[p.url] !== undefined);
-    if (!anyLoaded) return renderPerf(undefined);
-    if (sc.length) return renderPerf(Math.round(sc.reduce((a, b) => a + b, 0) / sc.length));
-    // Every page in the group resolved without a score — surface one of the
-    // reasons rather than an unexplained dash on the summary row.
-    return renderPerf(null, rows.map((p) => perfError[p.url]).find(Boolean));
-  };
+  // Average performance across a set of pages, per profile (lazy — spinner until
+  // at least one page's score has loaded).
+  const groupPerf = (rows) =>
+    Object.fromEntries(
+      PROFILES.map((s) => {
+        const anyLoaded = rows.some((p) => perf[p.url] !== undefined);
+        if (!anyLoaded) return [s, <PerfCell key={s} score={undefined} strategy={s} />];
+        const sc = rows.map((p) => at(p.url, s)?.score).filter((v) => typeof v === 'number');
+        if (sc.length) {
+          return [s, <PerfCell key={s} score={Math.round(sc.reduce((a, b) => a + b, 0) / sc.length)} strategy={s} />];
+        }
+        // Every page in the group resolved without a score — surface one of the
+        // reasons rather than an unexplained dash on the summary row.
+        return [s, <PerfCell key={s} score={null} error={rows.map((p) => at(p.url, s)?.error).find(Boolean)} strategy={s} />];
+      })
+    );
 
   const renderRow = (p, cls = '') => {
     const dl = p.deltas || {};
-    const score = perf[p.url];
     return (
       <tr key={p.url} className={cls}>
         <td>
@@ -247,17 +276,21 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
             </>
           )}
         </td>
-        <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
-        <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
         <Metric value={p.clicks} delta={dl.clicks} compare={compare} />
-        <Metric value={p.views} delta={dl.views} compare={compare} />
+        <Metric value={p.impressions} delta={dl.impressions} compare={compare} />
+        <Metric value={p.position} delta={dl.position} display={p.position || '—'} compare={compare} />
+        <Metric value={p.activeUsers} delta={dl.activeUsers} compare={compare} />
         <Metric
           value={p.bounceRate}
           delta={dl.bounceRate}
           display={p.bounceRate != null ? Math.round(p.bounceRate * 100) + '%' : '—'}
           compare={compare}
         />
-        <td>{renderPerf(score, perfError[p.url])}</td>
+        {PROFILES.map((s) => (
+          <td key={s}>
+            <PerfCell score={at(p.url, s)?.score} error={at(p.url, s)?.error} strategy={s} />
+          </td>
+        ))}
       </tr>
     );
   };
@@ -295,10 +328,9 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
               <th>
                 <ColumnFilter label={pageCol.label} sort={sortDir(pageCol.key)} onSort={() => toggleSort(pageCol.key)} />
               </th>
-              {/* "Page leads" first, then the metric columns — click a field name
-                  to sort by it, the funnel to filter it. Page leads are the leads
-                  attributed to that specific page, which can total less than the
-                  title's figure. */}
+              {/* Click a field name to sort by it, the funnel to filter it. Page
+                  leads are the leads attributed to that specific page, which can
+                  total less than the title's figure. */}
               {allFilterCols.map((c) => (
                 <th key={c.key}>
                   <ColumnFilter
@@ -314,12 +346,15 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
                     sort={sortDir(c.key)}
                     onSort={() => toggleSort(c.key)}
                     action={
-                      c.key === 'perf' ? (
+                      // One refresh control, on the first perf column: a
+                      // measurement re-runs both profiles together, so a button
+                      // per column would just be two ways to start the same work.
+                      c.key === `perf_${PROFILES[0]}` ? (
                         <PerfRefresh
                           inHeader
                           measuredAt={perfMeasuredAt}
-                          strategy={strategy}
-                          scope="this combination's pages"
+                          strategy={PROFILES.join(' + ')}
+                          scope="this combination's pages, on mobile and desktop"
                           busy={perfBusy}
                           stale={perfStaleAny}
                           onClick={refreshPerf}
@@ -334,7 +369,7 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
           <tbody>
             {!pages.length ? (
               <tr>
-                <td colSpan={8} style={{ color: 'var(--muted)', textAlign: 'center', padding: '18px' }}>
+                <td colSpan={COL_COUNT} style={{ color: 'var(--muted)', textAlign: 'center', padding: '18px' }}>
                   No pages match the selected filters.
                 </td>
               </tr>
@@ -345,7 +380,7 @@ export default function PageTable({ pages: allPages, compare = true, leadsDeltas
                 <SummaryRow cls="group-total grp-org" rows={organicPages} perfCells={groupPerf(organicPages)} leadsValue={sumLeads(organicPages)} leadsDelta={anyFilter ? null : leadsDeltas?.organic} />
 
                 {/* Gap between the two groups */}
-                <tr className="grp-gap"><td colSpan={8} /></tr>
+                <tr className="grp-gap"><td colSpan={COL_COUNT} /></tr>
 
                 {/* PPC group: pages + cumulative subtotal (amber accent) */}
                 {ppcPages.map((p) => renderRow(p, 'grp-ppc'))}
